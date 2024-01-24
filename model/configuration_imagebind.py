@@ -28,11 +28,6 @@ from transformers.utils import logging
 
 logger = logging.get_logger(__name__)
 
-ImageBind_PRETRAINED_CONFIG_ARCHIVE_MAP = {
-    "openai/ImageBind-vit-base-patch32": "https://huggingface.co/openai/ImageBind-vit-base-patch32/resolve/main/config.json",
-    # See all ImageBind models at https://huggingface.co/models?filter=ImageBind
-}
-
 
 class ImageBindTextConfig(PretrainedConfig):
     r"""
@@ -623,7 +618,7 @@ class ImageBindThermalConfig(PretrainedConfig):
         return cls.from_dict(config_dict, **kwargs)
 
 
-class ImageBindINUConfig(PretrainedConfig):
+class ImageBindIMUConfig(PretrainedConfig):
     r"""
     This is the configuration class to store the configuration of a [`ImageBindVisionModel`]. It is used to instantiate a
     ImageBind vision encoder according to the specified arguments, defining the model architecture. Instantiating a
@@ -1016,7 +1011,7 @@ class ImageBindConfig(PretrainedConfig):
                     # If inferred from default argument values (just to be super careful)
                     else:
                         message = (
-                            f"`imu_config_dict` is provided which will be used to initialize `ImageBindINUConfig`. "
+                            f"`imu_config_dict` is provided which will be used to initialize `ImageBindIMUConfig`. "
                             f'The value `imu_config["{key}"]` will be overriden.'
                         )
                     logger.info(message)
@@ -1057,7 +1052,7 @@ class ImageBindConfig(PretrainedConfig):
         if imu_config is None:
             imu_config = {}
             logger.info(
-                "`imu_config` is `None`. initializing the `ImageBindINUConfig` with default values."
+                "`imu_config` is `None`. initializing the `ImageBindIMUConfig` with default values."
             )
 
         self.text_config = ImageBindTextConfig(**text_config)
@@ -1065,7 +1060,7 @@ class ImageBindConfig(PretrainedConfig):
         self.audio_config = ImageBindAudioConfig(**audio_config)
         self.depth_config = ImageBindDepthConfig(**depth_config)
         self.thermal_config = ImageBindThermalConfig(**thermal_config)
-        self.imu_config = ImageBindINUConfig(**imu_config)
+        self.imu_config = ImageBindIMUConfig(**imu_config)
 
         self.projection_dim = projection_dim
         self.logit_scale_init_value = logit_scale_init_value
@@ -1079,7 +1074,7 @@ class ImageBindConfig(PretrainedConfig):
         audio_config: ImageBindAudioConfig,
         depth_config: ImageBindDepthConfig,
         thermal_config: ImageBindThermalConfig,
-        imu_config: ImageBindINUConfig,
+        imu_config: ImageBindIMUConfig,
         **kwargs,
     ):
         r"""

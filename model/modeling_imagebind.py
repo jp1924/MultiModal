@@ -43,7 +43,7 @@ from .configuration_imagebind import (
     ImageBindAudioConfig,
     ImageBindDepthConfig,
     ImageBindThermalConfig,
-    ImageBindINUConfig,
+    ImageBindIMUConfig,
 )
 
 logger = logging.get_logger(__name__)
@@ -155,6 +155,10 @@ class ImageBindOutput(ModelOutput):
     image_embeds: torch.FloatTensor = None
     text_model_output: BaseModelOutputWithPooling = None
     vision_model_output: BaseModelOutputWithPooling = None
+    audio_model_output: BaseModelOutputWithPooling = None
+    depth_model_output: BaseModelOutputWithPooling = None
+    thermal_model_output: BaseModelOutputWithPooling = None
+    imu_model_output: BaseModelOutputWithPooling = None
 
     def to_tuple(self) -> Tuple[Any]:
         return tuple(
@@ -1018,9 +1022,9 @@ class ImageBindModel(ImageBindPreTrainedModel):
                 f" {type(config.thermal_config)}."
             )
 
-        if not isinstance(config.imu_config, ImageBindINUConfig):
+        if not isinstance(config.imu_config, ImageBindIMUConfig):
             raise ValueError(
-                "config.imu_config is expected to be of type ImageBindINUConfig but is of type"
+                "config.imu_config is expected to be of type ImageBindIMUConfig but is of type"
                 f" {type(config.imu_config)}."
             )
 
@@ -1678,10 +1682,10 @@ class ImageBindThermalModelWithProjection(ImageBindPreTrainedModel):
     ImageBind_START_DOCSTRING,
 )
 class ImageBindIMUModelWithProjection(ImageBindPreTrainedModel):
-    config_class = ImageBindVisionConfig
+    config_class = ImageBindIMUConfig
     main_input_name = "pixel_values"
 
-    def __init__(self, config: ImageBindVisionConfig):
+    def __init__(self, config: ImageBindIMUConfig):
         super().__init__(config)
 
         self.vision_model = ImageBindVisionTransformer(config)
