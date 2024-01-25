@@ -21,6 +21,7 @@ from typing import Any, Optional, Tuple, Union
 import torch
 import torch.utils.checkpoint
 from torch import nn
+from torch.nn import functional as F
 from transformers.activations import ACT2FN
 from transformers.modeling_attn_mask_utils import (
     _create_4d_causal_attention_mask,
@@ -69,6 +70,35 @@ def ImageBind_loss(similarity: torch.Tensor) -> torch.Tensor:
 
 
 @dataclass
+class ImageBindTextModelOutput(ModelOutput):
+    """
+    Base class for text model's outputs that also contains a pooling of the last hidden states.
+
+    Args:
+        text_embeds (`torch.FloatTensor` of shape `(batch_size, output_dim)` *optional* returned when model is initialized with `with_projection=True`):
+            The text embeddings obtained by applying the projection layer to the pooler_output.
+        last_hidden_state (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
+            Sequence of hidden-states at the output of the last layer of the model.
+        hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
+            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
+
+            Hidden-states of the model at the output of each layer plus the optional initial embedding outputs.
+        attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
+            heads.
+    """
+
+    text_embeds: Optional[torch.FloatTensor] = None
+    last_hidden_state: torch.FloatTensor = None
+    hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    attentions: Optional[Tuple[torch.FloatTensor]] = None
+
+
+@dataclass
 class ImageBindVisionModelOutput(ModelOutput):
     """
     Base class for vision model's outputs that also contains image embeddings of the pooling of the last hidden states.
@@ -98,13 +128,13 @@ class ImageBindVisionModelOutput(ModelOutput):
 
 
 @dataclass
-class ImageBindTextModelOutput(ModelOutput):
+class ImageBindAudioModelOutput(ModelOutput):
     """
-    Base class for text model's outputs that also contains a pooling of the last hidden states.
+    Base class for audio model's outputs that also contains image embeddings of the pooling of the last hidden states.
 
     Args:
-        text_embeds (`torch.FloatTensor` of shape `(batch_size, output_dim)` *optional* returned when model is initialized with `with_projection=True`):
-            The text embeddings obtained by applying the projection layer to the pooler_output.
+        image_embeds (`torch.FloatTensor` of shape `(batch_size, output_dim)` *optional* returned when model is initialized with `with_projection=True`):
+            The image embeddings obtained by applying the projection layer to the pooler_output.
         last_hidden_state (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
             Sequence of hidden-states at the output of the last layer of the model.
         hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
@@ -120,7 +150,94 @@ class ImageBindTextModelOutput(ModelOutput):
             heads.
     """
 
-    text_embeds: Optional[torch.FloatTensor] = None
+    audio_embeds: Optional[torch.FloatTensor] = None
+    last_hidden_state: torch.FloatTensor = None
+    hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    attentions: Optional[Tuple[torch.FloatTensor]] = None
+
+
+@dataclass
+class ImageBindDepthModelOutput(ModelOutput):
+    """
+    Base class for depth model's outputs that also contains image embeddings of the pooling of the last hidden states.
+
+    Args:
+        image_embeds (`torch.FloatTensor` of shape `(batch_size, output_dim)` *optional* returned when model is initialized with `with_projection=True`):
+            The image embeddings obtained by applying the projection layer to the pooler_output.
+        last_hidden_state (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
+            Sequence of hidden-states at the output of the last layer of the model.
+        hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
+            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
+
+            Hidden-states of the model at the output of each layer plus the optional initial embedding outputs.
+        attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
+            heads.
+    """
+
+    depth_embeds: Optional[torch.FloatTensor] = None
+    last_hidden_state: torch.FloatTensor = None
+    hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    attentions: Optional[Tuple[torch.FloatTensor]] = None
+
+
+@dataclass
+class ImageBindThermalModelOutput(ModelOutput):
+    """
+    Base class for thermal model's outputs that also contains image embeddings of the pooling of the last hidden states.
+
+    Args:
+        image_embeds (`torch.FloatTensor` of shape `(batch_size, output_dim)` *optional* returned when model is initialized with `with_projection=True`):
+            The image embeddings obtained by applying the projection layer to the pooler_output.
+        last_hidden_state (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
+            Sequence of hidden-states at the output of the last layer of the model.
+        hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
+            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
+
+            Hidden-states of the model at the output of each layer plus the optional initial embedding outputs.
+        attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
+            heads.
+    """
+
+    thermal_embeds: Optional[torch.FloatTensor] = None
+    last_hidden_state: torch.FloatTensor = None
+    hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    attentions: Optional[Tuple[torch.FloatTensor]] = None
+
+
+@dataclass
+class ImageBindIMUModelOutput(ModelOutput):
+    """
+    Base class for imu model's outputs that also contains image embeddings of the pooling of the last hidden states.
+
+    Args:
+        image_embeds (`torch.FloatTensor` of shape `(batch_size, output_dim)` *optional* returned when model is initialized with `with_projection=True`):
+            The image embeddings obtained by applying the projection layer to the pooler_output.
+        last_hidden_state (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
+            Sequence of hidden-states at the output of the last layer of the model.
+        hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
+            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
+
+            Hidden-states of the model at the output of each layer plus the optional initial embedding outputs.
+        attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
+            heads.
+    """
+
+    imu_embeds: Optional[torch.FloatTensor] = None
     last_hidden_state: torch.FloatTensor = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
@@ -170,6 +287,45 @@ class ImageBindOutput(ModelOutput):
 
 
 class ImageBindVisionEmbeddings(nn.Module):
+    def __init__(self, config: ImageBindVisionConfig):
+        super().__init__()
+        self.config = config
+        self.embed_dim = config.hidden_size
+        self.image_size = config.image_size
+        self.patch_size = config.patch_size
+
+        self.class_embedding = nn.Parameter(torch.randn(self.embed_dim))
+
+        self.patch_embedding = nn.Conv2d(
+            in_channels=config.num_channels,
+            out_channels=self.embed_dim,
+            kernel_size=self.patch_size,
+            stride=self.patch_size,
+            bias=False,
+        )
+
+        self.num_patches = (self.image_size // self.patch_size) ** 2
+        self.num_positions = self.num_patches + 1
+        self.position_embedding = nn.Embedding(self.num_positions, self.embed_dim)
+        self.register_buffer(
+            "position_ids", torch.arange(self.num_positions).expand((1, -1)), persistent=False
+        )
+
+    def forward(self, pixel_values: torch.FloatTensor) -> torch.Tensor:
+        batch_size = pixel_values.shape[0]
+        target_dtype = self.patch_embedding.weight.dtype
+        patch_embeds = self.patch_embedding(
+            pixel_values.to(dtype=target_dtype)
+        )  # shape = [*, width, grid, grid]
+        patch_embeds = patch_embeds.flatten(2).transpose(1, 2)
+
+        class_embeds = self.class_embedding.expand(batch_size, 1, -1)
+        embeddings = torch.cat([class_embeds, patch_embeds], dim=1)
+        embeddings = embeddings + self.position_embedding(self.position_ids)
+        return embeddings
+
+
+class ImageBindVideoEmbeddings(nn.Module):
     def __init__(self, config: ImageBindVisionConfig):
         super().__init__()
         self.config = config
@@ -871,6 +1027,16 @@ class ImageBindVisionTransformer(nn.Module):
         self.encoder = ImageBindEncoder(config)
         self.post_layernorm = nn.LayerNorm(embed_dim, eps=config.layer_norm_eps)
 
+    def conv2d_to_3d(self):
+        # ImageBind에선 IMU와 같은 Video 데이터를 처리하기 위해 Conv3d를 사용함.
+        # 문제는 huggingface clip은 Conv2d를 사용하기 때문에 imu 데이터를 처리하는 게 불가능 함.
+        # (ImageBind논문에서도 OpenCLIP과 같은 공식 구현체를 사용했다 되어 있는데, OpenCLIP에서도 Conv3d는 사용하지 않음.
+        # 아마 ImageBind 팀도 같은 문제에 직면 했고 해결 했을 가능성이 높음.)
+        # 그렇기 때문에 conv2d_to_3d 메서드를 통해 2d를 3d로 변경하는 작업이 필요함.
+        # 주의해야 하는 점은 무조건 모델의 weight가 전부 불러와진 뒤 변경해야 한다.
+        # 그리고 weight와 bias 값을 늘려서 옮기는 거다 보니 deepspeed나 fsdp를 적용 했을 때 사이드 이펙트가 발생할 수 있음.
+        pass
+
     @add_start_docstrings_to_model_forward(ImageBind_VISION_INPUTS_DOCSTRING)
     @replace_return_docstrings(
         output_type=BaseModelOutputWithPooling, config_class=ImageBindVisionConfig
@@ -1049,7 +1215,7 @@ class ImageBindModel(ImageBindPreTrainedModel):
         self.audio_model = ImageBindVisionTransformer(audio_config)
         self.depth_model = ImageBindVisionTransformer(depth_config)
         self.thermal_model = ImageBindVisionTransformer(thermal_config)
-        self.imu_model = ImageBindVisionTransformer(imu_config)
+        self.imu_model = None  # TODO: IMU encoder 구현하기
 
         self.text_projection = nn.Linear(self.text_embed_dim, self.projection_dim, bias=False)
         self.visual_projection = nn.Linear(self.vision_embed_dim, self.projection_dim, bias=False)
@@ -1165,6 +1331,18 @@ class ImageBindModel(ImageBindPreTrainedModel):
         image_features = self.visual_projection(pooled_output)
 
         return image_features
+
+    def get_audio_features(self) -> torch.FloatTensor:
+        return
+
+    def get_depth_features(self) -> torch.FloatTensor:
+        return
+
+    def get_thermal_features(self) -> torch.FloatTensor:
+        return
+
+    def get_imu_features(self) -> torch.FloatTensor:
+        return
 
     @add_start_docstrings_to_model_forward(ImageBind_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=ImageBindOutput, config_class=ImageBindConfig)
@@ -1441,21 +1619,21 @@ class ImageBindVisionModelWithProjection(ImageBindPreTrainedModel):
     ImageBind_START_DOCSTRING,
 )
 class ImageBindAudioModelWithProjection(ImageBindPreTrainedModel):
-    config_class = ImageBindVisionConfig
+    config_class = ImageBindAudioConfig
     main_input_name = "pixel_values"
 
-    def __init__(self, config: ImageBindVisionConfig):
+    def __init__(self, config: ImageBindAudioConfig):
         super().__init__(config)
 
-        self.vision_model = ImageBindVisionTransformer(config)
+        self.audio_model = ImageBindVisionTransformer(config)
 
-        self.visual_projection = nn.Linear(config.hidden_size, config.projection_dim, bias=False)
+        self.audio_projection = nn.Linear(config.hidden_size, config.projection_dim, bias=False)
 
         # Initialize weights and apply final processing
         self.post_init()
 
     def get_input_embeddings(self) -> nn.Module:
-        return self.vision_model.embeddings.patch_embedding
+        return self.audio_model.embeddings.patch_embedding
 
     @add_start_docstrings_to_model_forward(ImageBind_VISION_INPUTS_DOCSTRING)
     @replace_return_docstrings(
@@ -1467,7 +1645,7 @@ class ImageBindAudioModelWithProjection(ImageBindPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, ImageBindVisionModelOutput]:
+    ) -> Union[Tuple, ImageBindAudioModelOutput]:
         r"""
         Returns:
 
@@ -1491,26 +1669,26 @@ class ImageBindAudioModelWithProjection(ImageBindPreTrainedModel):
         ```"""
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        vision_outputs = self.vision_model(
+        audio_outputs = self.audio_model(
             pixel_values=pixel_values,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
 
-        pooled_output = vision_outputs[1]  # pooled_output
+        pooled_output = audio_outputs[1]  # pooled_output
 
-        image_embeds = self.visual_projection(pooled_output)
+        audio_embeds = self.audio_projection(pooled_output)
 
         if not return_dict:
-            outputs = (image_embeds, vision_outputs[0]) + vision_outputs[2:]
+            outputs = (audio_embeds, audio_outputs[0]) + audio_outputs[2:]
             return tuple(output for output in outputs if output is not None)
 
-        return ImageBindVisionModelOutput(
-            image_embeds=image_embeds,
-            last_hidden_state=vision_outputs.last_hidden_state,
-            hidden_states=vision_outputs.hidden_states,
-            attentions=vision_outputs.attentions,
+        return ImageBindAudioModelOutput(
+            audio_embeds=audio_embeds,
+            last_hidden_state=audio_outputs.last_hidden_state,
+            hidden_states=audio_outputs.hidden_states,
+            attentions=audio_outputs.attentions,
         )
 
 
@@ -1521,21 +1699,21 @@ class ImageBindAudioModelWithProjection(ImageBindPreTrainedModel):
     ImageBind_START_DOCSTRING,
 )
 class ImageBindDepthModelWithProjection(ImageBindPreTrainedModel):
-    config_class = ImageBindVisionConfig
+    config_class = ImageBindDepthConfig
     main_input_name = "pixel_values"
 
-    def __init__(self, config: ImageBindVisionConfig):
+    def __init__(self, config: ImageBindDepthConfig):
         super().__init__(config)
 
-        self.vision_model = ImageBindVisionTransformer(config)
+        self.depth_model = ImageBindVisionTransformer(config)
 
-        self.visual_projection = nn.Linear(config.hidden_size, config.projection_dim, bias=False)
+        self.depth_projection = nn.Linear(config.hidden_size, config.projection_dim, bias=False)
 
         # Initialize weights and apply final processing
         self.post_init()
 
     def get_input_embeddings(self) -> nn.Module:
-        return self.vision_model.embeddings.patch_embedding
+        return self.depth_model.embeddings.patch_embedding
 
     @add_start_docstrings_to_model_forward(ImageBind_VISION_INPUTS_DOCSTRING)
     @replace_return_docstrings(
@@ -1547,7 +1725,7 @@ class ImageBindDepthModelWithProjection(ImageBindPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, ImageBindVisionModelOutput]:
+    ) -> Union[Tuple, ImageBindDepthModelOutput]:
         r"""
         Returns:
 
@@ -1571,26 +1749,26 @@ class ImageBindDepthModelWithProjection(ImageBindPreTrainedModel):
         ```"""
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        vision_outputs = self.vision_model(
+        depth_outputs = self.depth_model(
             pixel_values=pixel_values,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
 
-        pooled_output = vision_outputs[1]  # pooled_output
+        pooled_output = depth_outputs[1]  # pooled_output
 
-        image_embeds = self.visual_projection(pooled_output)
+        depth_embeds = self.depth_projection(pooled_output)
 
         if not return_dict:
-            outputs = (image_embeds, vision_outputs[0]) + vision_outputs[2:]
+            outputs = (depth_embeds, depth_outputs[0]) + depth_outputs[2:]
             return tuple(output for output in outputs if output is not None)
 
-        return ImageBindVisionModelOutput(
-            image_embeds=image_embeds,
-            last_hidden_state=vision_outputs.last_hidden_state,
-            hidden_states=vision_outputs.hidden_states,
-            attentions=vision_outputs.attentions,
+        return ImageBindDepthModelOutput(
+            depth_embeds=depth_embeds,
+            last_hidden_state=depth_outputs.last_hidden_state,
+            hidden_states=depth_outputs.hidden_states,
+            attentions=depth_outputs.attentions,
         )
 
 
@@ -1601,21 +1779,21 @@ class ImageBindDepthModelWithProjection(ImageBindPreTrainedModel):
     ImageBind_START_DOCSTRING,
 )
 class ImageBindThermalModelWithProjection(ImageBindPreTrainedModel):
-    config_class = ImageBindVisionConfig
+    config_class = ImageBindThermalConfig
     main_input_name = "pixel_values"
 
-    def __init__(self, config: ImageBindVisionConfig):
+    def __init__(self, config: ImageBindThermalConfig):
         super().__init__(config)
 
-        self.vision_model = ImageBindVisionTransformer(config)
+        self.thermal_model = ImageBindVisionTransformer(config)
 
-        self.visual_projection = nn.Linear(config.hidden_size, config.projection_dim, bias=False)
+        self.thermal_projection = nn.Linear(config.hidden_size, config.projection_dim, bias=False)
 
         # Initialize weights and apply final processing
         self.post_init()
 
     def get_input_embeddings(self) -> nn.Module:
-        return self.vision_model.embeddings.patch_embedding
+        return self.thermal_model.embeddings.patch_embedding
 
     @add_start_docstrings_to_model_forward(ImageBind_VISION_INPUTS_DOCSTRING)
     @replace_return_docstrings(
@@ -1628,7 +1806,7 @@ class ImageBindThermalModelWithProjection(ImageBindPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, ImageBindVisionModelOutput]:
+    ) -> Union[Tuple, ImageBindThermalModelOutput]:
         r"""
         Returns:
 
@@ -1652,26 +1830,26 @@ class ImageBindThermalModelWithProjection(ImageBindPreTrainedModel):
         ```"""
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        vision_outputs = self.vision_model(
+        thermal_outputs = self.thermal_model(
             pixel_values=pixel_values,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
 
-        pooled_output = vision_outputs[1]  # pooled_output
+        pooled_output = thermal_outputs[1]  # pooled_output
 
-        image_embeds = self.visual_projection(pooled_output)
+        thermal_embeds = self.thermal_projection(pooled_output)
 
         if not return_dict:
-            outputs = (image_embeds, vision_outputs[0]) + vision_outputs[2:]
+            outputs = (thermal_embeds, thermal_outputs[0]) + thermal_outputs[2:]
             return tuple(output for output in outputs if output is not None)
 
-        return ImageBindVisionModelOutput(
-            image_embeds=image_embeds,
-            last_hidden_state=vision_outputs.last_hidden_state,
-            hidden_states=vision_outputs.hidden_states,
-            attentions=vision_outputs.attentions,
+        return ImageBindThermalModelOutput(
+            thermal_embeds=thermal_embeds,
+            last_hidden_state=thermal_outputs.last_hidden_state,
+            hidden_states=thermal_outputs.hidden_states,
+            attentions=thermal_outputs.attentions,
         )
 
 
@@ -1688,15 +1866,15 @@ class ImageBindIMUModelWithProjection(ImageBindPreTrainedModel):
     def __init__(self, config: ImageBindIMUConfig):
         super().__init__(config)
 
-        self.vision_model = ImageBindVisionTransformer(config)
+        self.imu_model = None
 
-        self.visual_projection = nn.Linear(config.hidden_size, config.projection_dim, bias=False)
+        self.imu_projection = nn.Linear(config.hidden_size, config.projection_dim, bias=False)
 
         # Initialize weights and apply final processing
         self.post_init()
 
     def get_input_embeddings(self) -> nn.Module:
-        return self.vision_model.embeddings.patch_embedding
+        return self.imu_model.embeddings.patch_embedding
 
     @add_start_docstrings_to_model_forward(ImageBind_VISION_INPUTS_DOCSTRING)
     @replace_return_docstrings(
@@ -1708,7 +1886,7 @@ class ImageBindIMUModelWithProjection(ImageBindPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, ImageBindVisionModelOutput]:
+    ) -> Union[Tuple, ImageBindIMUModelOutput]:
         r"""
         Returns:
 
@@ -1732,24 +1910,27 @@ class ImageBindIMUModelWithProjection(ImageBindPreTrainedModel):
         ```"""
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        vision_outputs = self.vision_model(
+        imu_outputs = self.imu(
             pixel_values=pixel_values,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
 
-        pooled_output = vision_outputs[1]  # pooled_output
+        pooled_output = imu_outputs[1]  # pooled_output
 
-        image_embeds = self.visual_projection(pooled_output)
+        imu_embeds = self.imu_projection(pooled_output)
 
         if not return_dict:
-            outputs = (image_embeds, vision_outputs[0]) + vision_outputs[2:]
+            outputs = (imu_embeds, imu_outputs[0]) + imu_outputs[2:]
             return tuple(output for output in outputs if output is not None)
 
-        return ImageBindVisionModelOutput(
-            image_embeds=image_embeds,
-            last_hidden_state=vision_outputs.last_hidden_state,
-            hidden_states=vision_outputs.hidden_states,
-            attentions=vision_outputs.attentions,
+        return ImageBindIMUModelOutput(
+            imu_embeds=imu_embeds,
+            last_hidden_state=imu_outputs.last_hidden_state,
+            hidden_states=imu_outputs.hidden_states,
+            attentions=imu_outputs.attentions,
         )
+
+
+test
