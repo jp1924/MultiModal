@@ -1,13 +1,13 @@
 from transformers import PretrainedConfig, CLIPConfig
 
 
-class OneLLMUniversalEncoderConfig(PretrainedConfig):
+class OneLLMUniversalProjectionConfig(PretrainedConfig):
     # TODO: 여기에 PretrainedConfig를 사용할 지 말지는 고민 중, 나중에 돌려보고 뺄지 말지 결정할 것
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
 
-class OneLLMUniversalProjectionConfig(PretrainedConfig):
+class OneLLMUniversalEncoderConfig(PretrainedConfig):
     # TODO: 여기에 PretrainedConfig를 사용할 지 말지는 고민 중, 나중에 돌려보고 뺄지 말지 결정할 것ㅁ
     def __init__(
         self,

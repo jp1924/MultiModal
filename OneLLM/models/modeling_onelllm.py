@@ -15,7 +15,7 @@ from transformers.models.clip.modeling_clip import (
 )
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRMSNorm
 from transformers.modeling_outputs import BaseModelOutputWithPooling
-from .configuration_onellm import OneLLMConfig, OneLLMUniversalProjectionConfig
+from .configuration_onellm import OneLLMConfig, OneLLMUniversalEncoderConfig
 import torch.nn as nn
 import torch
 from typing import Optional, List, Union, Tuple
@@ -167,8 +167,8 @@ class OneLLMPreTrainedModel(PreTrainedModel):
                 module.weight.data[module.padding_idx].zero_()
 
 
-class OneLLMUniversalProjection(nn.Module):
-    def __init__(self, config: OneLLMUniversalProjectionConfig) -> None:
+class OneLLMUniversalEncoder(nn.Module):
+    def __init__(self, config: OneLLMUniversalEncoderConfig) -> None:
         super().__init__()
         self.image_embeddings = CLIPVisionEmbeddings(config)
         self.audio_embeddings = CLIPAudioEmbeddings(config)
@@ -245,7 +245,7 @@ class OneLLMUniversalProjection(nn.Module):
         )
 
 
-class OneLLMUniversalEncoder(nn.Module):
+class OneLLMUniversalProjection(nn.Module):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
