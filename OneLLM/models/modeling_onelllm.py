@@ -5,6 +5,7 @@ from transformers.modeling_attn_mask_utils import (
     _prepare_4d_causal_attention_mask,
     _prepare_4d_causal_attention_mask_for_sdpa,
 )
+from transformers.models.clip.configuration_clip import CLIPVisionConfig
 from transformers.models.clip.modeling_clip import (
     CLIPVisionModel,
     CLIPEncoder,
@@ -13,27 +14,83 @@ from transformers.models.clip.modeling_clip import (
     CLIPMLP,
 )
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRMSNorm
-from .configuration_onellm import OneLLMConfig
+from transformers.modeling_outputs import BaseModelOutputWithPooling
+from .configuration_onellm import OneLLMConfig, OneLLMUniversalProjectionConfig
 import torch.nn as nn
 import torch
-from typing import Optional, List
+from typing import Optional, List, Union, Tuple
 
 logger = logging.get_logger(__name__)
 
 
-class CLIPAudioEmbeddings(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+class CLIPAudioEmbeddings(CLIPVisionEmbeddings):
+    def __init__(self, config) -> None:
+        super().__init__(config)
+        self.config = config
+        self.patch_size = config.audio_patch_size
+        self.stride_size = config.audio_stride_size
+        # NOTE: class embedding 값은 clip의 weight를 가져다 사용해야 하는데 이걸 어떻게 구현해야 할 지 모르겠음. 고민해 볼 것
+        self.patch_embedding = nn.Conv2d(
+            in_channels=config.audio_num_channels,
+            out_channels=self.embed_dim,
+            kernel_size=self.patch_size,
+            stride=self.stride_size,
+            bias=False,
+        )
+
+        self.num_positions = config.audio_num_positions
+        self.position_embedding = nn.Embedding(self.num_positions, self.embed_dim)
+        self.register_buffer(
+            "position_ids", torch.arange(self.num_positions).expand((1, -1)), persistent=False
+        )
 
 
-class CLIPFMRIEmbeddings(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+class CLIPFMRIEmbeddings(CLIPVisionEmbeddings):
+    def __init__(self, config) -> None:
+        super().__init__(config)
+        self.config = config
+        # NOTE: class embedding 값은 clip의 weight를 가져다 사용해야 하는데 이걸 어떻게 구현해야 할 지 모르겠음. 고민해 볼 것
+        self.patch_embedding = nn.Linear(config.fmri_input, config.fmri_output)
+
+        self.num_positions = config.fmri_num_positions
+        self.position_embedding = nn.Embedding(self.num_positions, self.embed_dim)
+        self.register_buffer(
+            "position_ids", torch.arange(self.num_positions).expand((1, -1)), persistent=False
+        )
+
+    def forward(self, pixel_values: torch.FloatTensor) -> torch.Tensor:
+        batch_size = pixel_values.shape[0]
+        target_dtype = self.patch_embedding.weight.dtype
+
+        patch_embeds = self.patch_embedding(pixel_values.to(dtype=target_dtype))
+        patch_embeds = patch_embeds.reshape(batch_size, self.embed_dim, -1)
+        # [B, 1, 8196] -> [B, hidden_size, 8]
+
+        breakpoint()  # BUG: shape애러가 발생할 수 있음.
+        class_embeds = self.class_embedding.expand(batch_size, 1, -1)
+        embeddings = torch.cat([class_embeds, patch_embeds], dim=1)
+        embeddings = embeddings + self.position_embedding(self.position_ids)
+        return embeddings
 
 
-class CLIPPointEmbeddings(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+class CLIPIMUEmbeddings(CLIPVisionEmbeddings):
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+        self.patch_size = config.imu_num_channels
+        # NOTE: class embedding 값은 clip의 weight를 가져다 사용해야 하는데 이걸 어떻게 구현해야 할 지 모르겠음. 고민해 볼 것
+        self.patch_embedding = nn.Conv1d(
+            in_channels=config.imu_num_channels,
+            out_channels=self.embed_dim,
+            kernel_size=self.patch_size,
+            bias=False,
+        )
+
+        self.num_positions = config.imu_num_positions
+        self.position_embedding = nn.Embedding(self.num_positions, self.embed_dim)
+        self.register_buffer(
+            "position_ids", torch.arange(self.num_positions).expand((1, -1)), persistent=False
+        )
 
 
 class OneLLMPreTrainedModel(PreTrainedModel):
@@ -49,7 +106,29 @@ class OneLLMPreTrainedModel(PreTrainedModel):
         """Initialize the weights"""
         factor = self.config.initializer_factor
         if isinstance(module, CLIPVisionEmbeddings):
-            factor = self.config.initializer_factor
+            nn.init.normal_(module.class_embedding, mean=0.0, std=module.embed_dim**-0.5 * factor)
+            nn.init.normal_(
+                module.patch_embedding.weight, std=module.config.initializer_range * factor
+            )
+            nn.init.normal_(
+                module.position_embedding.weight, std=module.config.initializer_range * factor
+            )
+        elif isinstance(module, CLIPAudioEmbeddings):
+            nn.init.normal_(module.class_embedding, mean=0.0, std=module.embed_dim**-0.5 * factor)
+            nn.init.normal_(
+                module.patch_embedding.weight, std=module.config.initializer_range * factor
+            )
+            nn.init.normal_(
+                module.position_embedding.weight, std=module.config.initializer_range * factor
+            )
+        elif isinstance(module, CLIPFMRIEmbeddings):
+            nn.init.normal_(module.class_embedding, mean=0.0, std=module.embed_dim**-0.5 * factor)
+            # 얘만 patch_embedding로 linear를 사용함.
+            nn.init.normal_(module.patch_embedding, std=module.config.initializer_range * factor)
+            nn.init.normal_(
+                module.position_embedding.weight, std=module.config.initializer_range * factor
+            )
+        elif isinstance(module, CLIPIMUEmbeddings):
             nn.init.normal_(module.class_embedding, mean=0.0, std=module.embed_dim**-0.5 * factor)
             nn.init.normal_(
                 module.patch_embedding.weight, std=module.config.initializer_range * factor
@@ -58,7 +137,6 @@ class OneLLMPreTrainedModel(PreTrainedModel):
                 module.position_embedding.weight, std=module.config.initializer_range * factor
             )
         elif isinstance(module, CLIPAttention):
-            factor = self.config.initializer_factor
             in_proj_std = (
                 (module.embed_dim**-0.5)
                 * ((2 * module.config.num_hidden_layers) ** -0.5)
@@ -70,7 +148,6 @@ class OneLLMPreTrainedModel(PreTrainedModel):
             nn.init.normal_(module.v_proj.weight, std=in_proj_std)
             nn.init.normal_(module.out_proj.weight, std=out_proj_std)
         elif isinstance(module, CLIPMLP):
-            factor = self.config.initializer_factor
             in_proj_std = (
                 (module.config.hidden_size**-0.5)
                 * ((2 * module.config.num_hidden_layers) ** -0.5)
@@ -91,6 +168,84 @@ class OneLLMPreTrainedModel(PreTrainedModel):
 
 
 class OneLLMUniversalProjection(nn.Module):
+    def __init__(self, config: OneLLMUniversalProjectionConfig) -> None:
+        super().__init__()
+        self.image_embeddings = CLIPVisionEmbeddings(config)
+        self.audio_embeddings = CLIPAudioEmbeddings(config)
+        self.fmri_embeddings = CLIPFMRIEmbeddings(config)
+        self.imu_embeddings = CLIPIMUEmbeddings(config)
+        # point_embedding는 구현이 너무 어려워서 뺌, cuda하고 cpp파일 넣어야 함.
+        # sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
+        # class_embedding 값을 무조건 clip의 사전 학습된 weight로 바꿔놔야 함!!!!
+        # sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
+
+        self.pre_layrnorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.encoder = CLIPEncoder(config)
+        self.post_layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+
+    def forward(
+        self,
+        pixel_values: Optional[torch.FloatTensor] = None,
+        data_type: str = "",
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, BaseModelOutputWithPooling]:
+        r"""
+        Returns:
+
+        """
+        output_attentions = (
+            output_attentions if output_attentions is not None else self.config.output_attentions
+        )
+        output_hidden_states = (
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
+        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        if data_type not in ["image", "audio", "imu", "fmri"]:
+            raise ValueError("지원하지 않는 데이터 타입")
+
+        if pixel_values is None:
+            raise ValueError("You have to specify pixel_values")
+
+        if data_type == "image":
+            # original clip embedding layer
+            hidden_states = self.image_embeddings(pixel_values)
+        elif data_type == "audio":
+            hidden_states = self.audio_embeddings(pixel_values)
+        elif data_type == "imu":
+            hidden_states = self.imu_embeddings(pixel_values)
+        elif data_type == "fmri":
+            hidden_states = self.fmri_embeddings(pixel_values)
+
+        hidden_states = self.pre_layrnorm(hidden_states)
+
+        encoder_outputs = self.encoder(
+            inputs_embeds=hidden_states,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        last_hidden_state = encoder_outputs[0]
+        pooled_output = last_hidden_state[:, 0, :]
+        pooled_output = self.post_layernorm(pooled_output)
+
+        if not return_dict:
+            return (last_hidden_state, pooled_output) + encoder_outputs[1:]
+
+        return BaseModelOutputWithPooling(
+            last_hidden_state=last_hidden_state,
+            pooler_output=pooled_output,
+            hidden_states=encoder_outputs.hidden_states,
+            attentions=encoder_outputs.attentions,
+        )
+
+
+class OneLLMUniversalEncoder(nn.Module):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
@@ -101,20 +256,9 @@ class OneLLMForLLama(OneLLMPreTrainedModel):
 
         # config
         self.config = config
-        clip_config = config.clip
         llm_config = config.llm_config
 
         # clip
-        self.image_embeddings = CLIPVisionEmbeddings(clip_config)
-        self.clip_pre_layrnorm = nn.LayerNorm(
-            clip_config.hidden_size,
-            eps=clip_config.layer_norm_eps,
-        )
-        self.clip_encoder = CLIPEncoder(clip_config)
-        self.clip_post_layernorm = nn.LayerNorm(
-            clip_config.hidden_size,
-            eps=clip_config.layer_norm_eps,
-        )
 
         # MoE
 
