@@ -350,6 +350,24 @@ class ImageBindVideoEmbeddings(nn.Module):
             "position_ids", torch.arange(self.num_positions).expand((1, -1)), persistent=False
         )
 
+    def conv2d_to_3d(self):
+        # ImageBind에선 IMU와 같은 Video 데이터를 처리하기 위해 Conv3d를 사용함.
+        # 문제는 huggingface clip은 Conv2d를 사용하기 때문에 imu 데이터를 처리하는 게 불가능 함.
+        # (ImageBind논문에서도 OpenCLIP과 같은 공식 구현체를 사용했다 되어 있는데, OpenCLIP에서도 Conv3d는 사용하지 않음.
+        # 아마 ImageBind 팀도 같은 문제에 직면 했고 해결 했을 가능성이 높음.)
+        # 그렇기 때문에 conv2d_to_3d 메서드를 통해 2d를 3d로 변경하는 작업이 필요함.
+        # 주의해야 하는 점은 무조건 모델의 weight가 전부 불러와진 뒤 변경해야 한다.
+        # 그리고 weight와 bias 값을 늘려서 옮기는 거다 보니 deepspeed나 fsdp를 적용 했을 때 사이드 이펙트가 발생할 수 있음.
+
+        self.patch_embedding = nn.Conv3d(
+            in_channels=self.num_channels,
+            out_channels=self.embed_dim,
+            kernel_size=self.video_patch_size,
+            stride=self.video_patch_size,
+            bias=False,
+        )
+        pass
+
     def forward(self, pixel_values: torch.FloatTensor) -> torch.Tensor:
         batch_size = pixel_values.shape[0]
         target_dtype = self.patch_embedding.weight.dtype
@@ -1026,16 +1044,6 @@ class ImageBindVisionTransformer(nn.Module):
         self.pre_layrnorm = nn.LayerNorm(embed_dim, eps=config.layer_norm_eps)
         self.encoder = ImageBindEncoder(config)
         self.post_layernorm = nn.LayerNorm(embed_dim, eps=config.layer_norm_eps)
-
-    def conv2d_to_3d(self):
-        # ImageBind에선 IMU와 같은 Video 데이터를 처리하기 위해 Conv3d를 사용함.
-        # 문제는 huggingface clip은 Conv2d를 사용하기 때문에 imu 데이터를 처리하는 게 불가능 함.
-        # (ImageBind논문에서도 OpenCLIP과 같은 공식 구현체를 사용했다 되어 있는데, OpenCLIP에서도 Conv3d는 사용하지 않음.
-        # 아마 ImageBind 팀도 같은 문제에 직면 했고 해결 했을 가능성이 높음.)
-        # 그렇기 때문에 conv2d_to_3d 메서드를 통해 2d를 3d로 변경하는 작업이 필요함.
-        # 주의해야 하는 점은 무조건 모델의 weight가 전부 불러와진 뒤 변경해야 한다.
-        # 그리고 weight와 bias 값을 늘려서 옮기는 거다 보니 deepspeed나 fsdp를 적용 했을 때 사이드 이펙트가 발생할 수 있음.
-        pass
 
     @add_start_docstrings_to_model_forward(ImageBind_VISION_INPUTS_DOCSTRING)
     @replace_return_docstrings(
