@@ -1,11 +1,13 @@
-import datasets
+import json
 import os
 from pathlib import Path
 from tarfile import TarFile
 from zipfile import ZipFile
-import json
 
-from datasets import Value, Features, Sequence, Audio
+import datasets
+import requests
+from datasets import Features, Audio, Sequence, Value
+from tqdm import tqdm
 
 
 _LICENSE = """
@@ -80,26 +82,28 @@ class NaturalandArtificialOccurrenceNonverbalSoundDatasets(datasets.GeneratorBas
         aihub_pass = os.getenv("AIHUB_PASS", None)
 
         if not aihub_id:
-            raise ValueError("데이터 다운을 위해선 환경변수로 AIHUB_ID가 설정되어 있어야 합니다! 환경변수로 AiHub의 ID를 입력해 주세요!")
-
+            raise ValueError(
+                """AIHUB_ID가 지정되지 않았습니다. `os.environ["AIHUB_ID"]="your_id"`로 ID를 지정해 주세요"""
+            )
         if not aihub_pass:
             raise ValueError(
-                "데이터 다운을 위해선 환경변수로 AIHUB_PASS가 설정되어 있어야 합니다! 환경변수로 AiHub의 password를 입력해 주세요!"
+                """AIHUB_PASS가 지정되지 않았습니다. `os.environ["AIHUB_PASS"]="your_pass"`로 ID를 지정해 주세요"""
             )
 
-        header = {
-            "id": aihub_id,
-            "pass": aihub_pass,
-        }
-        param = "fileSn=all"
-
-        obj = SmartDL(
-            f"{BASE_DOWNLOAD_URL}?{param}",
-            progress_bar=True,
-            request_args={"headers": header},
-            dest=str(recv_path),
+        response = requests.get(
+            DOWNLOAD_URL,
+            headers={"id": aihub_id, "pass": aihub_pass},
+            params={"fileSn": "all"},
+            stream=True,
         )
-        obj.start(blocking=True)
+
+        if response.status_code != 200:
+            raise BaseException(f"Download failed with HTTP status code: {response.status_code}")
+
+        with open(recv_path, "wb") as file:
+            # chunk_size는 byte수
+            for chunk in tqdm(response.iter_content(chunk_size=1024)):
+                file.write(chunk)
 
     def unzip_data(self, tar_file: Path, unzip_dir: Path) -> list:
         with TarFile(tar_file, "r") as mytar:
@@ -126,13 +130,14 @@ class NaturalandArtificialOccurrenceNonverbalSoundDatasets(datasets.GeneratorBas
         return list(unzip_dir.rglob("*.zip*"))
 
     def _split_generators(self, dl_manager):
-        data_name = "Natural_and_artificial_occurrence_nonverbal_sound_datasets"
+        data_name = "Outside_Knowledge_based_Multimodal_QA_Data"
         cache_dir = Path(dl_manager.download_config.cache_dir)
         unzip_dir = cache_dir.joinpath(data_name)
 
         if not unzip_dir.exists():
             tar_file = cache_dir.joinpath(f"{data_name}.tar")
             self.aihub_downloader(tar_file)
+            # 압축이 덜 출렸을 때를 고려해야 함.
             zip_file_path = self.unzip_data(tar_file, unzip_dir)
 
         train_split = [x for x in zip_file_path if "Training" in str(x)]
