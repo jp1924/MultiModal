@@ -1,20 +1,4 @@
-# coding=utf-8
-# Copyright 2020 The HuggingFace Datasets Authors and the current dataset script contributor.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""Naver movie review corpus for binary sentiment classification"""
-
-
+# -*- coding: utf-8 -*-
 import json
 import os
 from pathlib import Path
@@ -164,6 +148,8 @@ class Outside_Knowledge_based_Multimodal_QA_Data(datasets.GeneratorBasedBuilder)
             self.aihub_downloader(tar_file)
             # 압축이 덜 출렸을 때를 고려해야 함.
             zip_file_path = self.unzip_data(tar_file, unzip_dir)
+        else:
+            zip_file_path = list(unzip_dir.glob("**/*.zip"))
 
         train_split = [x for x in zip_file_path if "Training" in str(x)]
         valid_split = [x for x in zip_file_path if "Validation" in str(x)]

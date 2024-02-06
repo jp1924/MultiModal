@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import json
 import os
 from pathlib import Path
@@ -139,6 +140,8 @@ class NaturalandArtificialOccurrenceNonverbalSoundDatasets(datasets.GeneratorBas
             self.aihub_downloader(tar_file)
             # 압축이 덜 출렸을 때를 고려해야 함.
             zip_file_path = self.unzip_data(tar_file, unzip_dir)
+        else:
+            zip_file_path = list(unzip_dir.glob("**/*.zip"))
 
         train_split = [x for x in zip_file_path if "Training" in str(x)]
         valid_split = [x for x in zip_file_path if "Validation" in str(x)]
@@ -162,9 +165,17 @@ class NaturalandArtificialOccurrenceNonverbalSoundDatasets(datasets.GeneratorBas
 
     def _generate_examples(self, filepath, split):
         source_ls = [ZipFile(x) for x in filepath if "원천데이터" in str(x)]
-        label_ls = [ZipFile(x) for x in filepath if "라벨링데이터" in str(x)]
+        source_ls = sorted(source_ls, key=lambda x: x.filename)
 
+        label_ls = [ZipFile(x) for x in filepath if "라벨링데이터" in str(x)]
+        label_ls = sorted(label_ls, key=lambda x: x.filename)
+
+        # .encode('cp437').decode('cp949') #를 하면 깨졌던 인코딩을 정상적으로 돌릴 수 있음.
         breakpoint()
+
+        for source_zip, label_zip in zip(source_ls, label_ls):
+            source_zip
+            label_zip
 
         label = json.loads(label_ls[0].open(label_ls[0].filelist[0]).read().decode("utf-8"))
         label = {x["IMAGE_NAME"]: x for x in label["annotations"]}
