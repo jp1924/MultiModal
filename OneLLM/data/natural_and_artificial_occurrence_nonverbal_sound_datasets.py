@@ -21,7 +21,7 @@ _DESCRIPTION = """\
 """
 
 DATASET_KEY = "644"
-BASE_DOWNLOAD_URL = f"https://api.aihub.or.kr/down/{DATASET_KEY}.do"
+DOWNLOAD_URL = f"https://api.aihub.or.kr/down/{DATASET_KEY}.do"
 _HOMEPAGE = f"https://aihub.or.kr/aihubdata/data/view.do?currMenu=115&topMenu=100&aihubDataSe=realm&dataSetSn={DATASET_KEY}"
 
 
