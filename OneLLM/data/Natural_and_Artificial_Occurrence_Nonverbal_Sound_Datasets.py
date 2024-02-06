@@ -130,7 +130,7 @@ class NaturalandArtificialOccurrenceNonverbalSoundDatasets(datasets.GeneratorBas
         return list(unzip_dir.rglob("*.zip*"))
 
     def _split_generators(self, dl_manager):
-        data_name = "Outside_Knowledge_based_Multimodal_QA_Data"
+        data_name = "Natural_and_Artificial_Occurrence_Nonverbal_Sound_Datasets"
         cache_dir = Path(dl_manager.download_config.cache_dir)
         unzip_dir = cache_dir.joinpath(data_name)
 
