@@ -19,7 +19,7 @@
 - 하지만 각 모달을 얼린 상태로 학습하면 각 모달별로 신호를 정렬하는 것이 어려움.  
     대안으로 Vision, Langauge 신호를 서로 정렬하기 위한 2-stage 학습 기법과 Q-Former를 제안 함.
     1. 1 step으로 입력된 Vision 신호를 Langauge 모델이 이해할 수 있게 Q-Former가 모달간 신호를 정렬하는 과정
-    2. 2 step으로
+    2. 2 step으로 사전학습된 Q-Former를 langauge 모델과 연결시켜 모델의 생성형 task에 맞춰 학습시키는 과정
 
 // Q-Former내의 학습 가능한 QKV 백터를 이용해 얼려진 Vision 모델의 신호를 추출 함.
 
