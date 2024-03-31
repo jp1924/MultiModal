@@ -47,24 +47,26 @@ MLLM으로 mPLug-Owl를 사용, 다만 mPlug-Owl을 온전히 사용하는 것�
 - 텍스트가 이미지의 사이즈는 다양해 이를 Resize하게 되면 텍스트가 뭉개지고 왜곡되는 문제가 존재 함.  
 특히 문서나 테이블과 같이 정보에 대한 밀도가 높은 이미지에선 특히 문제가 됨. 해결을 위해 우린 Shape-Adaptive Cropping 모듈을 제안함.
 
+TODO: 여긴 아직 이해를 못했음. 나중에 다시 볼 것
+
 - 그림 3과 같이 사전에 다양한 크기의 그리드를 정의함. 이미지 H * W의 크기를 가진 이미지에 맞는 그리드를 찾기 위해선 다음과 같은 규칙이 따라야 함.
     1. 그리드는 이미지에 대한 해상도를 최대한 보존하고 있어야 함.
     2. 그리드는 입력된 이미지의 종횡비와 맞아야 함.
 
 - 이미지와 그리드 간의 해상도와 모양을 측정하기 위해 다음과 같은 수식을 사용해 이를 측정 함.
 
-위한 로컬 이미지로 변환하는 과정에서 우린 `그리드`를 정의해서 사용함.
-
-{g = (nh × nw)|nh - nw ≤ Nc, nh ∈ N, nw ∈ N}
-그리드는 nh와 nw의 셀의 수를 가진 2차원 배열임.
-그리드의 nh와 nw는 Nc보다 작거나 같아야 함.
-그리드의 nh와 nw는 N에 속해 있는 자연수 임.
-
-Nc는 셀(하위 이미지)의 최대 수
-
-IoU(Intersection over Union): 교집합 대 합집합
+IoU(Intersection over Union): 교집합 대 합집합, Object Detection에서 사용되는 모델의 평가 산식
 $1. S_{rr}(I, g) = IoU((H, W), (n_h H_u, n_w W_v))$
 
 $2. S_{ra}(I, g) = IoU\left(\left(\frac{n_w H}{W}, n_w\right), (n_h, n_w)\right) $
 
-asdasd
+이 방정식에 따라 이미지를 그리드 개수 만큼 crop하여 로컬이미지로 만듬.
+
+이후 로컬 이미지를 모델에 넣어 각 이미지에 대한 features를 추출한 뒤 이 features를 f_K에 입력해 llm이 이해할 수 있게 요약하는 과정을 거친다.
+
+### Cropped Images Modeling with LLM
+
+- VIT와 같이 local image에 1차원 적인 absolute positional encoding을 시키면 공간적 위치 특성을 반양하지 못한다는 문제가 있음.
+이 문제를 해결하기 위해 2 차원 positional encoding을 적용 함. 각 그리드 별로 위치된 로컬 이미지에 (i, j) 인덱스를 매겨서 행과 열 임베딩 정보를 추가 시킴.
+
+- 이후 LLM을 학습 시킬 때 LoRA를 적용해 모델을 학습 시킴.

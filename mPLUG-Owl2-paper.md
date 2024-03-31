@@ -28,14 +28,205 @@ GPT-3 [6], LLaMA [57, 58], GPT-4 [46]와 같은 대규모 언어 모델(LLM)은 
 
 ### Overview
 
+Figure 2 (a) sketches the overview of the mPLUG-Owl2.
+Specifically, our model comprises a vision encoder, a visual
+abstractor, a text embedding layer, and a language decoder.
+Notably, the standard implementation of the text embedding layer and language decoder involves the use of a large
+language model, such as GPT [6] or LLaMA [57]. We
+first briefly introduce our model’s architecture in Section
+3.2. Furthermore, we handle different types of modalities by introducing the modality-adaptive module in Section
+3.3. Lastly, we introduce the training paradigm for training
+mPLUG-Owl2 with modality collaboration in Section 3.4.
+
 ### Model Architecture
+
+As depicted in Figure 2, our model, referred to as mPLUGOwl2, is composed of three main components: a fundamental vision encoder [48], a visual abstractor, and a language decoder. Specifically, we utilize ViT-L/14 as the
+vision encoder and LLaMA-2-7B [58] as the language decoder. The vision encoder processes an input image with
+an H × W resolution and produces a sequence of H
+14 ×
+W
+14
+tokens. These visual token features are then combined with
+text token embeddings and fed into the language decoder
+that serves as a universal interface that converts various
+vision-language tasks into text-generation tasks. However,
+with the increase in image resolution, the encoded visual
+token sequences can exponentially lengthen. Additionally,
+the presence of abundant redundancy in the images (e.g.,
+background, similar patches) leads to computational waste
+and introduces considerable noise. To address this, we
+propose a visual abstractor equipped with a fixed set of
+learnable queries to extract higher semantic features from
+images. Specifically, we feed the extracted visual token sequence I = [I1, I2, · · · , IP ] ∈ R
+P ×d
+and a fixed number of
+K learnable queries Q ∈ R
+K×d
+into the visual abstractor.
+Here, P =
+H
+14 ×
+W
+14 represents the number of visual patches, and D is the hidden dimension. The visual abstractor consists of a series of visual abstractor layers. In the i-th layer of
+the visual abstractor, the compressed visual representations
+V
+i+1 are computed as follows:
+
+(1)
+(2)
+
+Here, Attn(·, ·, ·) represents the self-attention operation,
+while W1 ∈ R
+d×d
+′
+and W2 ∈ R
+d
+′×d
+are learnable parameters. The function SwiGLU(· · ·) refers to the SwiGLU
+activation function [51]. We designate V
+0 = Q to initiate
+the process. Moreover, to augment the fine-grained perception ability, we integrate sinusoidal positional embeddings
+with the image feature I and V
+i
+, thereby preserving positional information, which has been proven essential in [8].
+Hence, the computation required by the language decoder
+decreases from O((P + L)
+2
+) to O((K + L)
+2
+), significantly
+reducing computational load when P ≫ K, particularly
+in scenarios involving multiple images and when the text
+length L is relatively short. Once the compressed visual
+feature is obtained, it is concatenated with text token embeddings and then processed by the language decoder to
+generate the prediction.
 
 ### Modality-Adaptive Module
 
+Prior approaches [15, 38, 68, 75] typically attempt to align
+visual features with language features by projecting image
+features into the language semantic space. However, this
+strategy can cause a mismatch in granularity , where image
+features often contain fruitful semantic information compared to the discrete semantic information within text embedding features. Those methods disregard the unique characteristics of visual and textual information, thus potentially
+limiting the model’s performance. To this end, we propose
+a new approach, namely, the Modality-Adaptive Module
+(MAM), which decouples vision-language representations
+by projecting visual features and language features into a
+shared semantic space while preserving the distinctive properties of each modality.
+
+Formally, given a vision-language sequence X ∈
+R
+(LV +LT )×d
+and modality indicators M ∈ {0, 1}
+(Lv+LT )
+,
+we first define modality separated operation ϕ as:
+
+(3)
+
+where m ∈ {0, 1} is the type of modalities (i.e., vision
+or language). Given the previous layer’s output vectors
+Hl−1, l ∈ [1, L], where L is the number of language decoder
+layers, we first normalized different modalities into the same
+magnitude as follows:
+
+(4)
+
+where LNV and LNT are layer normalization [4] for visual
+features and language features respectively. Then, we reformulate the self-attention operation by leveraging separated
+linear projection layers for key projection matrix and value
+projection matrix while preserving query projection matrix
+shared as follows:
+
+(5)
+(6)
+(7)
+(8)
+
+where W
+Q
+l
+, W K0
+l
+, W K1
+l
+, WV0
+l
+, WV1
+l ∈ R
+d×d
+are the learnable projection matrices, and Cl ∈ R
+(LV +LT )×d
+is the context features of l-th layer. In this manner, we can calculate
+the similarities between these two modalities within a shared
+semantic space, while also preserving the unique characteristics of each modality through different value projection
+layers. Moreover, by decoupling the key and value projection matrix, we can avoid interference between the two
+modalities, particularly in relation to granularity mismatch.
+In a similar vein, we also aim to model these characteristics by using different layer normalization layers. Finally,
+in order to promote modality collaboration within the same
+feature space, we maintain a shared FFN for both modalities.
+As a consequence, the model is able to preserve modality characteristics while achieving modality collaboration via
+the proposed modality-adaptive module.
+
 ### Training Paradigm
+
+As depicted in Figure 2 (c), we employ a two-stage approach
+in training mPLUG-Owl2, comprising pre-training and visual instruction tuning similar to [38, 68], which aims to
+align the pre-trained vision encoder and language model during the pre-training phase, and then fine-tune the language
+model with language modeling loss during the instruction
+tuning phase. However, we find that simply freezing a pretrained vision encoder and training a vision-language projector to align visual data with language models can limit
+their capacity to interpret complex visual information, such
+as scene text and visual knowledge. To address the issue,
+we make the vision encoder trainable throughout both the
+pre-training and instruction tuning stages. This strategy
+allows the model to capture both low-level and high-level
+semantic visual information more effectively. Specifically,
+for the pre-training stage, we enable the vision encoder,
+visual abstractor, and a part of the modality-adaptive module to be trainable, while keeping the pre-trained language
+model frozen. Meanwhile, prior research in multi-modal
+learning [63] has indicated that significant enhancements
+can be achieved through the collaborative learning of unimodal and multi-modal sources. Based on this, we adopt
+a joint training approach by tuning the whole model during the instruction tuning stage, incorporating both text and multi-modal instructions. This methodology enhances the
+model’s comprehension of visual concepts embedded within
+the text by the multi-modal instructions. Concurrently, the
+text instruction data augments the model’s understanding of
+intricate natural instructions, thereby ensuring the preservation of its linguistic capabilities
 
 ## Experiments
 
 ### Implementation
+
+#### Data sets
+
+mPLUG-Owl2 is first pre-trained on image-text
+pairs and fine-tunes on mono-modal and multi-modal instruction data. For pre-training data, we randomly pick about
+400 million image-text pairs from five public datasets: Conceptual Captions (CC3M/CC12M) [9], COCO [35], Laionen [49], COYO [7], DataComp [18]. For instruction data,
+we collect 5 types of datasets including 1) image captioning
+(i.e., TextCaps [53], COCO [35]); 2) image question answering (i.e., VQAv2 [21], OKVQA [43], OCR-VQA [44], GQA
+[24], and A-OKVQA [50]); 3) region-aware QA (i.e., RefCOCO [69], VisualGenome [26]); 4) multi-modal instruct
+data (i.e., LLaVA-instruct-150K [38]); 5) text-only instruct data (i.e., ShareGPT-80K [1], SlimOrca [34]). Details can
+be found in the Appendix.
+
+#### Training Settings
+
+We pre-train the model for 42,500 iterations with a batch size 8,192 for about 348 million imagetext pairs. Since we adopt the language modeling loss,
+the large batch size can be easily achieved by the gradient accumulation technique. mPLUG-Owl2 adopts ViT-L
+[48] with patch size 14 × 14 and pre-trained at resolution
+224 × 224. We use the same data augmentation in BLIP2 [31], including random resized cropping, and horizontal
+flipping with a probability of 0.5. The number of layers in
+the visual abstractor is set to 6 and it is randomly initialized. The number of learnable queries is set to 64. For the
+language model, LLaMA-2 [58] is employed for handling
+multi-modal features with 7B parameters, and the parameters of modality-adaptive modules are initialized from the
+language model. We use the AdamW [40] optimizer with
+β1 = 0.9, β2 = 0.98 and ϵ =1e-6 for optimization. The
+cosine learning rate decay scheduler with a peak learning
+rate of 1e-4 and with warmup steps 1k. For the learning
+rate of the vision encoder, we employ layer-wise learning
+rate decay with a factor of 0.9 to retain the low-level visual representation. For the instruction tuning stage, we train the
+whole model for 1 epoch with a learning rate of 2e-5 and
+batch size 256. Besides, we increase the resolution from
+224 × 224 to 448 × 448. The layer-wise learning rate decay
+is also employed which is crucial for retaining good visual
+representation in our experiments.
 
 ### Main Results
