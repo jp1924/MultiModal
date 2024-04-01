@@ -16,3 +16,14 @@
 - Transformer Decoder 모델을 사용해 각 모달리티 간의 협업성을 늘리는 방법을 연구함.
 
 ## Introduction
+
+- BLIP-2, InstructBLIP, Minigpt-4와 같이 Q-Former를 사용하거나 Shikra, LLaVA와 같이 Projection레이어를 통해 multi modal을 구현하는 방식이 주를 이루었음.
+    하지만 이 방식을 사용하면 모달의 성능이 제한되는 문제가 있었음
+
+- mPlug-Owl, LLava와 같은 모델들이 Multi-Modal SFT를 진행하는 하는 방법을 제안 했었음
+    하지만 이 방식은 Multi Modality는 충족시킬 수 있더라도 일반 LLM에 영향을 끼쳐 성능에 영향을 준다는 것이 문제
+
+- MLLM에서 각 모달별로 협력해 성능 적으로 이득을 볼 수 있지만 반대로 각 모달별로 간섭해 성능 적으로 손해를 볼 수 있다.
+    때문에 mPlug-Owl2를 소개 함.
+
+- mPlug-Owl2는 각 모달별 신호를 관리하기 위한 모듈로 Text Decoder를 추가해 각 모달별로 협력을 도모하게 만듭니다.
