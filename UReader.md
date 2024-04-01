@@ -33,14 +33,11 @@ Vision Encoder를 사전학습 시키는 과정을 생략하는 대신 다양한
 - 고 해상도 이미지를 resize할 때 발생하는 품질저하(흐릿함, 왜곡) 문제를 방지를 위해 고 해상도 이미지를 여러 로컬 이미지로 분할하(패치?)는 shapeadaptive cropping 모듈을 제안 함.
 로컬 이미지를 서로 연관 시키기 위해 학습이 가능한 potional encoder를 추가해 분할로 인한 정보 손실을 완화 함.
 
-## Related Work
-
-... 작성 중
-
 ## UReader
 
-- UReader의 목표는 시각적 상황을 언어적으로 이해하는 작업에 MLLM을 효율적으로 사용하자는 것에 있음.
-MLLM으로 mPLug-Owl를 사용, 다만 mPlug-Owl을 온전히 사용하는 것이 아닌 Shape-Adaptive Cropping모듈을 사용해 로컬 이미지에 대해 서로 이해할 수 있도록 함. 그리고 고 해상도 에서 각각 잘린 이미지에 대한 연관성을 학습할 수 있도록 하기 위해 각 로컬 이미지에 positional encoding을 수행 함.
+- UReader의 목표는 Vision 모델의 신호를 언어적으로 이해해서, MLLM을 효율적으로 사용하자는 것에 있음.
+    MLLM으로 mPLug-Owl를 사용, 추가로 Shape-Adaptive Cropping모듈을 사용해 로컬 이미지에 대해 서로 이해할 수 있도록 함.
+    그리고 고해상도 이미지에서 추출된 로컬 이미지로부터 연관성을 학습할 수 있도록 하기 위해 각 positional encoding을 수행 함.
 
 ### Shape-Adaptive Cropping Module
 
@@ -54,11 +51,6 @@ TODO: 여긴 아직 이해를 못했음. 나중에 다시 볼 것
     2. 그리드는 입력된 이미지의 종횡비와 맞아야 함.
 
 - 이미지와 그리드 간의 해상도와 모양을 측정하기 위해 다음과 같은 수식을 사용해 이를 측정 함.
-
-IoU(Intersection over Union): 교집합 대 합집합, Object Detection에서 사용되는 모델의 평가 산식
-$1. S_{rr}(I, g) = IoU((H, W), (n_h H_u, n_w W_v))$
-
-$2. S_{ra}(I, g) = IoU\left(\left(\frac{n_w H}{W}, n_w\right), (n_h, n_w)\right) $
 
 이 방정식에 따라 이미지를 그리드 개수 만큼 crop하여 로컬이미지로 만듬.
 
