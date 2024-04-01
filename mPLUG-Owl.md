@@ -4,17 +4,17 @@
 
 ### 기존 방식의 문제점
 
-- 논문 이전의 multimodal인 Llava, miniGPT는 vision encoder를 얼린 상태로 llm에 lora를 붙여서 학습을 진행 함.
- 그러다 보니 vision encoder와 llm간의 context가 완전히 정렬하지 않아 재한적인 multi-modality로 진행됨.
+- 기존의 multimodal인 BLIP-2, Llava는 Vision 모델을 얼린 상태에서 language 모델에 LoRA를 붙어 학습을 진행 함.
+ 그러다 보니 vision 모델과 language 모델 간의 신호가 완전히 정렬되지 않아 재한적인 성능이 낮았음.
 
-- 기존 Multi-Modal LLM은 end to end와 systematic collaboration 구조로 구현되고 있었음.
+- 기존 Multi-Modal LLM은 end-to-end와 systematic collaboration 구조로 구현되고 있었음.
  end to end는 성능은 좋으나 확장이 어렵고, systematic collaboration은 확장은 용이하나 성능이 낮은 문제점이 있었음.
 
 ### 논문이 제안하는 방식
 
-- vision encoder와 llm간의 정렬을 위해 2 stage 학습 기법을 제안.
- 1-stage: llm은 얼린 상태에서 사전학습 되어 있는 vision encoder에 image-text 데이터를 학습시켜 llm과의 1차 정렬
- 2-stage: vision encoder + llm을 얼린 상태에서 lora를 추가한 상태에서 특정 task에 대한 데이터 학습.
+- vision 모델과 language 모델 간의 신호 정렬을 위해 2 stage 학습 기법을 제안.
+  1. 1-stage: llm은 얼린 상태에서 사전학습 되어 있는 vision encoder에 image-text 데이터를 학습시켜 llm과의 1차 정렬
+  2. 2-stage: vision encoder + llm을 얼린 상태에서 lora를 추가한 상태에서 특정 task에 대한 데이터 학습.
 
 - 확장성과 성능이 둘다 높은 모듈화 방식을 제안함.
  LLM 모듈과, Vision 모듈, Vision 모듈과 연결된 추상화 모듈을 구조를 사용해 성능과 확장성을 둘다 고려할 수 있었음.
