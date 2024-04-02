@@ -94,9 +94,7 @@ NOTE: Multi-Modal에서 각 모달을 합치기 위해 사용하는 모듈의 �
         NOTE: (token_type_id라 생각하면 됨.)<br>
     2. 각 모달간의 간섭 최소화를 위해 $\phi(X, M, m) = X \odot \mathbb{1}_{\{M = m\}}$ 통해 각 신호를 분리함.
         AND 마스크를 적용시켜서 Vision, Langage 신호를 따로 분리함.<br>
-
     3. $LN_V(\phi(H_{l-1}, M, 0)) + LN_T(\phi(H_{l-1}, M, 1))$ Vision, Language 별로 분리한 각 신호들에 Layer Normalization을 적용함.<br>
-
     4. 정규화 까지 거친 Vision, Language 신호를 Attention 연산을 취한다.<br>
         각각 학습 가능한 Projection Layer를 통과시켜 Vision에 대한 Key, Value, Language에 대한 Key, Value 값으로 분리한 뒤 각각 $H^K_{l}$와 $H^V_{l}$를 얻어냄<br>
         다만 Query는 Vision, Language 신호를 분리하지 않은 상태로 Projection Layer를 통과시켜 얻음.<br>
@@ -108,7 +106,18 @@ NOTE: Multi-Modal에서 각 모달을 합치기 위해 사용하는 모듈의 �
 
         $C_{l} = Softmax\left(\frac{H^Q_{l} {H^K_{l}}^\top}{\sqrt{d}}\right)H^V_{l}$
         NOTE: (근데 이런 과정을 통해서 어떻게 모달간 간극과 간섭을 해결 한다는지 잘 와닿지 않음. 이건 직접 해보면서 볼 것)
+    5. Attention이 되어 나온 결과물을 FFN을 거치게 함.
+
+- 각 모달의 신호를 분리해서 처리하기 때문에 모달간의 간섭은 최소화 하면서 Attention연산을 통해 모달별 협력을 향상시킬 수 있다.<br>
+NOTE: (신호를 분리를 통해서 모달간 불일치(GAP) 문제도 해결된된다고 하는데 납득은 안됨)
 
 ### Training Paradigm
+
+- mPlug-Owl2는 mPlug-Owl1과 유시하게 2 stage의 학습을 통해 Multi-Modality를 학습 함.
+    1. 1-stage: Vision 모델, Vision Abstractor, MAM모듈을 훈련시키고 FFN는 고정시킨 상태로 사전학습 하는 단계
+    NOTE: (이렇게 학습해도 괜찮은게 맞나? 이러면 당연히 이전에 학습 했던 지식이 영향을 받을탠데?)
+    2. 2-stage: multi-modal SFT + Text SFT을 동시에 학습하는 단계
+        [mPLUG-2](https://arxiv.org/abs/2302.00402)에서 multi-modal SFT + Text SFT를 동시에 시키면 성능이 좋아진다고 입증 되었다고는 함.
+        하지만 아직 읽어보진 않았음.
 
 ## Experiments
