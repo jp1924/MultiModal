@@ -37,7 +37,7 @@ NOTE: Multi-Modal에서 각 모달을 합치기 위해 사용하는 모듈의 �
 
 ### Overview
 
-![hustlin_erd](./assets/fig2.pdf)
+![Fidure-2](./assets/fig2_page-0001.jpg)
 
 - mPlug-Owl2는 Vision 모델, Vision abstractor, Language 모델 3가지의 주요 파트로 구성되어 있다.
     Language 모델로 GPT, LLaMA2-7B 모델을 사용함. Vision 모델로 ViT-L/14를 사용
