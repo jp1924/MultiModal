@@ -44,14 +44,14 @@ NOTE: Multi-Modal에서 각 모달을 합치기 위해 사용하는 모듈의 �
 
 ### Model Architecture
 
-- mPlug-Owl2는 Vision 모델, Vision abstractor, Language 모델 3가지의 주요 파트로 구성
-    Language 모델로 GPT, LLaMA2-7B 모델을 사용함. Vision 모델로 ViT-L/14를 사용
+- mPlug-Owl2는 Vision 모델, Vision abstractor, Language 모델 3가지의 주요 파트로 구성<br>
+    Language 모델로 GPT, LLaMA2-7B 모델을 사용함. Vision 모델로 ViT-L/14를 사용<br>
 
-- Vision 모델은 입력된 H * W의 해상도의 이미지를 $\frac{H}{patch} \times \frac{W}{patch}$ 크기의 토큰 시퀀스로 변환한 뒤 Text 임베딩과 결합해 Decoder에 입력
-    하지만 Image 해상도에 비례해 토큰 시퀀스의 길이도 비례해서 커진다는 문제가 있음.
+- Vision 모델은 입력된 H * W의 해상도의 이미지를 $\frac{H}{patch} \times \frac{W}{patch}$ 크기의 토큰 시퀀스로 변환한 뒤 Text 임베딩과 결합해 Decoder에 입력<br>
+    하지만 Image 해상도에 비례해 토큰 시퀀스의 길이도 비례해서 커진다는 문제가 있음.<br>
 
 - Image에 존재하는 `배경` 같은 중복된 정보로 인해 자원의 낭비와 노이즈가 발생<br>
-    이 문재를 해결하기 위해 Vision Abstarctor를 사용해 Vision 신호 내에서 학습에 필요한 정보 만을 추출해 긴 시퀀스를 요약
+    이 문재를 해결하기 위해 Vision Abstarctor를 사용해 Vision 신호 내에서 학습에 필요한 정보 만을 추출해 긴 시퀀스를 요약<br>
 
 - Vision Abstarctor는 BLIP-2와 같이 일정 개수의 학습 가능한 Query가 존재.<br>
     이 Query를 이용해 전달받은 Vision 신호로 부터 필요한 정보만을 골라내서 추출 함.<br>
@@ -78,9 +78,37 @@ NOTE: Multi-Modal에서 각 모달을 합치기 위해 사용하는 모듈의 �
     <br>
     6. 결과 $O((P + L)^2)$의 연산량에서 $O((K + L)^2)$로 시간이 줄어듬<br>
 
-    위 과정을 거치면서 시각적인 특징이 압축된 Image 토큰 임베딩과 Text 토큰 임베딩을 concat한 뒤 Text Decoder에서 처리함.
+위 과정을 거치면서 시각적인 특징이 압축된 Image 토큰 임베딩과 Text 토큰 임베딩을 concat한 뒤 Text Decoder에서 처리함 <br>
 
 ### Modality-Adaptive Module
+
+- 기존에 Multi-Modality을 구현을 위해 Cross-Modal Alignment Module(Q-Former, Linear Projection)를 사용해 옴 <br>
+    하지만 Cross-Modal Alignment Module의 부족한 성능 때문에 Vision, language 모델 신호간의 간극(불일치)이 발생할 수 있다. <br>
+
+- 각 모달간 신호 불일치를 피하고자 Modality-Adaptive Module(MAM)를 제안함. <br>
+    MAM는 Vision Abstractor로부터 전달받은 Image + Text 신호가 합쳐진 시퀀스 토큰을 입력받게 됨. <br>
+
+- MAM는 다음과 같은 과정을 거쳐서 모달간 신호 간극을 축소함.<br>
+    1. Vision 신호와 Language 신호가 서로 합쳐진 $X \in \mathbb{R}^{(L_V + L_T) \times d}$를 입력받음.<br>
+        입력할 때 $m \in \{0,1\}$도 같이 입력해 각 시퀀스 별로 어떤 시퀀스가 Vision(0), Language(1)인지를 구분<br>
+        NOTE: (token_type_id라 생각하면 됨.)<br>
+    2. 각 모달간의 간섭 최소화를 위해 $\phi(X, M, m) = X \odot \mathbb{1}_{\{M = m\}}$ 통해 각 신호를 분리함.
+        AND 마스크를 적용시켜서 Vision, Langage 신호를 따로 분리함.<br>
+
+    3. $LN_V(\phi(H_{l-1}, M, 0)) + LN_T(\phi(H_{l-1}, M, 1))$ Vision, Language 별로 분리한 각 신호들에 Layer Normalization을 적용함.<br>
+
+    4. 정규화 까지 거친 Vision, Language 신호를 Attention 연산을 취한다.<br>
+        각각 학습 가능한 Projection Layer를 통과시켜 Vision에 대한 Key, Value, Language에 대한 Key, Value 값으로 분리한 뒤 각각 $H^K_{l}$와 $H^V_{l}$를 얻어냄<br>
+        다만 Query는 Vision, Language 신호를 분리하지 않은 상태로 Projection Layer를 통과시켜 얻음.<br>
+        $H^K_{l} = \phi(\tilde{H}_{l-1}, M, 0) W^{K_0}_l + \phi(\tilde{H}_{l-1}, M, 1) W^{K_1}_l$<br>
+        $H^V_{l} = \phi(\tilde{H}_{l-1}, M, 0) W^{V_0}_l + \phi(\tilde{H}_{l-1}, M, 1) W^{V_1}_l$<br>
+        $H^Q_{l} = \tilde{H}_{l-1} W^Q_l$<br>
+
+        이후 $H^K_{l}$, $H^V_{l}$, $H^Q_{l}$ 으로 Attention연산을 수행.
+
+        $C_{l} = Softmax\left(\frac{H^Q_{l} {H^K_{l}}^\top}{\sqrt{d}}\right)H^V_{l}$
+
+        NOTE: (Vision과 Language 신호를 복잡하게 분리하고 합치는 이유가 명확하지 않음, 추측컨데 모달간 간섭을 최소화 하기 위해 각 모달별로 전달받은 값을 Attention쳐서 살릴만한 녀석은 살리고 아닌녀석은 죽여서 각 모달별 간극을 최소화 할 수 있는 방향으로 학습하는 듯. 아직 정확하지 않음.)
 
 ### Training Paradigm
 
