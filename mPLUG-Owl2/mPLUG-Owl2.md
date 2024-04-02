@@ -107,8 +107,7 @@ NOTE: Multi-Modal에서 각 모달을 합치기 위해 사용하는 모듈의 �
         이후 $H^K_{l}$, $H^V_{l}$, $H^Q_{l}$ 으로 Attention연산을 수행.
 
         $C_{l} = Softmax\left(\frac{H^Q_{l} {H^K_{l}}^\top}{\sqrt{d}}\right)H^V_{l}$
-
-        NOTE: (Vision과 Language 신호를 복잡하게 분리하고 합치는 이유가 명확하지 않음, 추측컨데 모달간 간섭을 최소화 하기 위해 각 모달별로 전달받은 값을 Attention쳐서 살릴만한 녀석은 살리고 아닌녀석은 죽여서 각 모달별 간극을 최소화 할 수 있는 방향으로 학습하는 듯. 아직 정확하지 않음.)
+        NOTE: (근데 이런 과정을 통해서 어떻게 모달간 간극과 간섭을 해결 한다는지 잘 와닿지 않음. 이건 직접 해보면서 볼 것)
 
 ### Training Paradigm
 
