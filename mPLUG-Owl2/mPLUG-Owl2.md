@@ -100,9 +100,9 @@ NOTE: Multi-Modal에서 각 모달을 합치기 위해 사용하는 모듈의 �
     4. 정규화 까지 거친 Vision, Language 신호를 Attention 연산을 취한다.<br>
         각각 학습 가능한 Projection Layer를 통과시켜 Vision에 대한 Key, Value, Language에 대한 Key, Value 값으로 분리한 뒤 각각 $H^K_{l}$와 $H^V_{l}$를 얻어냄<br>
         다만 Query는 Vision, Language 신호를 분리하지 않은 상태로 Projection Layer를 통과시켜 얻음.<br>
-        $H^K_{l} = \phi(\tilde{H}_{l-1}, M, 0) W^{K_0}_l + \phi(\tilde{H}_{l-1}, M, 1) W^{K_1}_l$ <br>
-        $H^V_{l} = \phi(\tilde{H}_{l-1}, M, 0) W^{V_0}_l + \phi(\tilde{H}_{l-1}, M, 1) W^{V_1}_l$ <br>
-        $H^Q_{l} = \tilde{H}_{l-1} W^Q_l$ <br>
+        Key: $H^K_{l} = \phi(\tilde{H}_{l-1}, M, 0) W^{K_0}_l + \phi(\tilde{H}_{l-1}, M, 1) W^{K_1}_l$ <br>
+        Value: $H^V_{l} = \phi(\tilde{H}_{l-1}, M, 0) W^{V_0}_l + \phi(\tilde{H}_{l-1}, M, 1) W^{V_1}_l$ <br>
+        Query: $H^Q_{l} = \tilde{H}_{l-1} W^Q_l$ <br>
 
         이후 $H^K_{l}$, $H^V_{l}$, $H^Q_{l}$ 으로 Attention연산을 수행.
 
