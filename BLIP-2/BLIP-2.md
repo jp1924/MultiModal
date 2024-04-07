@@ -33,7 +33,7 @@
 - 고정된 상태의 Vision, Langauge 모델 간의 신호 차를 줄이기 위해 Q-Former를 시용
     Q-Former는 입력되는 이미지 해상도와 상관 없이 Vision 모델로 부터 고정된 길이의 신호만 추출.
 
-(Figure-1)
+![](./assets/figure-1.jpg)
 
 - Q-Former는 두개의 transformer 구조로 구성되어 있음
     각 Image Transformer와 Text Transformer는 서로 공유되는 Self-Attention를 보유하고 있음.
@@ -53,7 +53,7 @@ NOTE: (Self-Attention Layer를 공유하는 이유로 Image, Text Transformer의
 
 ### Bootstrap Vision-Language Representation Learning from a Frozen Image Encoder
 
-(Figure 2)
+![Figure-2](./assets/figure-2.jpg)
 
 - 1 stage에서 고정된 Vision 모델과 Q-Former에 Image-Text 쌍의 데이터를 입력해 Q-Former에서의 Query를 학습시킴.
     이때 Q-Former는 정보량이 많은 Image에서의 시각적인 특징을 추출할 수 있도록 학습 하는 것을 목표로 함.
@@ -86,7 +86,7 @@ NOTE: (Self-Attention Layer를 공유하는 이유로 Image, Text Transformer의
 
 ### Bootstrap Vision-to-Language Generative Learning from a Frozen LLM
 
-(Figure 3)
+![Figure-3](./assets/figure-3.jpg)
 
 - 2 stage에서 고정된 Vision 모델이 연결된 상태의 Q-Former를 LLM에 연결해 LLM에서의 생성 테스크를 수행 함.
     Q-Former를 통과한 Query 임베딩 토큰을 LLM에 입력할 수 있게 하기 위해 Projection Layer를 통해 선형변환 시켜 크기를 LLM에 맞춤
@@ -97,13 +97,3 @@ NOTE: (Self-Attention Layer를 공유하는 이유로 Image, Text Transformer의
     그리고 기존 방식 대비 Q-Former를 통해 시각 정보를 전달하기 때문에 고정된 language 모델은 망각 문제에서 자유로워 짐
 
 ### Model Pre-training
-
-#### Pre-training data
-
-#### Pre-trained image encoder and LLM
-
-#### Pre-training settings
-
-## Experiment
-
-작성 중

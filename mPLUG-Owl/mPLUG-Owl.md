@@ -40,6 +40,8 @@ Train-Method: 2-Stage 기법을 소개함. 1-stage에서 LLM모듈은 얼린 상
 
 ### Architecture Overview
 
+![](compare_page-0001.jpg)
+
 사진과 같이 기존의 end to end MLLM은 3가지 방식으로 구현되고 있었음.
 
 1) MiniGPT4처럼 얼린 상태의 Vision-Encoder와 LLM를 사용해 pretrain, SFT 하는 방법
@@ -59,6 +61,7 @@ mPLUG-Owl은 크게 Image를 인코딩 하는 f_V, Text를 이해하는 f_L, 인
 
 ### Training Scheme
 
+![](./assets/model_page-0001.jpg)
 #### Multimodal Pretraining
 
 LLM에게 시각 정보를 이해시키기 위해 BLIP-2와 같이 LLM과 Vision Encoder 사이에 제한된 수의 파라메터를 가진 모델을 추가해 LLM에게 시각 정보를 입력시켜 왔음.
