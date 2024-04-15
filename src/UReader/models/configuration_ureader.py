@@ -44,7 +44,7 @@ class UReaderAbstractorConfig(PretrainedConfig):
         initializer_range=0.02,
         layer_norm_eps=1e-12,
         pad_token_id=0,
-        position_embedding_type="absolute",
+        position_embedding_type="pre",
         cross_attention_frequency=2,
         encoder_hidden_size=1408,
         **kwargs,

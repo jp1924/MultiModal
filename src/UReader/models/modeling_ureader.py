@@ -4,132 +4,49 @@ import torch
 import torch.nn as nn
 from transformers import (
     AutoModel,
+    Blip2QFormerModel,
     CLIPVisionConfig,
     CLIPVisionModel,
     LlamaModel,
     PreTrainedModel,
 )
+from transformers.modeling_outputs import BaseModelOutputWithPoolingAndCrossAttentions
 
 from .configuration_ureader import UReaderAbstractorConfig, UReaderConfig
 
 
-class UReaderAbstractorEmbeddings(nn.Module):
+class UReaderPatchEmbeddings(nn.Module):
 
     def __init__(self, config: UReaderAbstractorConfig, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
         self.cut_num = 15  # TODO hard code되어 있음.
-        self.height_embedding = torch.nn.Embedding(self.cut_num, config.hidden_size)
-        self.width_embedding = torch.nn.Embedding(self.cut_num, config.hidden_size)
+        self.h_postion_patch_embedding = torch.nn.Embedding(self.cut_num, config.hidden_size)  # height
+        self.w_postion_patch_embedding = torch.nn.Embedding(self.cut_num, config.hidden_size)  # width
 
     def forward(
         self,
-        query_embeds,
-        attention_mask=None,
-        head_mask=None,
-        encoder_hidden_states=None,
-        encoder_attention_mask=None,
-        past_key_values=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        patch_positions=None,
-        return_dict=None,
+        hidden_states,
+        patch_positions,
     ):
-        if self.patch_pos_embed_type == "pre":
-            # 根据patch_positions把Patch重新组织 打padding
-            if self.enable_vit_cut_embedding:
-                # 这里就不加patch_embedding了
-                patch_embedding = encoder_hidden_states
-            else:
-                patch_embedding = (
-                    self.cut_patch_embedding_h(patch_positions[:, 0])
-                    + self.cut_patch_embedding_w(patch_positions[:, 1])
-                ) * 0.5
-                patch_embedding = einops.repeat(
-                    patch_embedding, "N D -> N num_token D", num_token=encoder_hidden_states.shape[1]
-                )
-                patch_embedding = encoder_hidden_states + patch_embedding
-            cut_index = (patch_positions == 0).all(dim=1).nonzero().squeeze(1).tolist()
-            patch_group = [
-                patch_embedding[cut:] if ci == len(cut_index) - 1 else patch_embedding[cut : cut_index[ci + 1]]
-                for ci, cut in enumerate(cut_index)
-            ]
-            patch_group = [einops.rearrange(_, "num_patch num_token D -> (num_patch num_token) D") for _ in patch_group]
-            patch_mask = [torch.ones(_.shape[0], dtype=torch.long, device=patch_embedding.device) for _ in patch_group]
-            encoder_attention_mask = pad_sequence(patch_mask, batch_first=True, padding_value=0)
-            encoder_hidden_states = pad_sequence(
-                patch_group, batch_first=True, padding_value=0.0
-            )  # -> B (num_patch num_token + pad) D
+        h_embedding = self.h_postion_patch_embedding(patch_positions[:, 0])
+        w_embedding = self.w_postion_patch_embedding(patch_positions[:, 1])
+        patch_embedding = h_embedding + w_embedding
 
-        return
+        patch_embedding = patch_embedding[:, None, :]  # [N, D] > [N, 1, D]
+        patch_embedding = patch_embedding.expand(-1, hidden_states.shape[1], -1)  # [N, 1, D] > [N, S, D]
 
+        patch_embedding = hidden_states + patch_embedding
 
-class UReaderPreTrainedModel(PreTrainedModel):
-    """
-    An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
-    models.
-    """
-
-    config_class = UReaderConfig
-    base_model_prefix = "UReader"
-    supports_gradient_checkpointing = True
-    _keys_to_ignore_on_load_missing = [
-        r"position_ids",
-        r"language_model.encoder.embed_tokens.weight",
-        r"language_model.decoder.embed_tokens.weight",
-        r"language_model.lm_head.weight",
-    ]
-    _no_split_modules = [
-        "MplugOwlVisionEncoderLayer",
-        "LlamaDecoderLayer",
-        "MplugOwlVisualAbstractorLayer",
-        "LlamaForCausalLM",
-        "Parameter",
-    ]
-    _keep_in_fp32_modules = ["wo"]
-
-    def _init_weights(self, module):
-        """Initialize the weights"""
-        factor = self.config.initializer_range
-        if isinstance(module, nn.Conv2d) or isinstance(module, nn.Embedding) or isinstance(module, nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=factor)
-            if hasattr(module, "bias") and module.bias is not None:
-                module.bias.data.zero_()
-
-        if isinstance(module, MplugOwlVisionEmbeddings):
-            if hasattr(self.config, "vision_config"):
-                factor = self.config.vision_config.initializer_range
-            nn.init.trunc_normal_(module.position_embedding, mean=0.0, std=factor)
-            nn.init.trunc_normal_(module.cls_token, mean=0.0, std=factor)
-
-        elif isinstance(module, nn.LayerNorm):
-            module.bias.data.zero_()
-            module.weight.data.fill_(1.0)
-        elif isinstance(module, nn.Linear) and module.bias is not None:
-            module.bias.data.zero_()
-        elif isinstance(module, nn.Parameter):
-            raise ValueError
-            nn.init.trunc_normal_(module.data, mean=0.0, std=factor)
-
-    def _set_gradient_checkpointing(self, module, value=False):
-        if isinstance(module, MplugOwlVisionEncoder):
-            module.gradient_checkpointing = value
+        return patch_embedding
 
 
 # from copide Copied from transformers.models.modeling_blip_2.Blip2QFormerModel
-class UReaderAbstractorModel(UReaderPreTrainedModel):
-    """
-    Querying Transformer (Q-Former), used in BLIP-2.
-    """
-
+class UReaderAbstractorModel(Blip2QFormerModel):
     def __init__(self, config: UReaderAbstractorConfig):
         super().__init__(config)
-        self.config = config
 
-        self.layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
-
-        self.encoder = Blip2QFormerEncoder(config)
+        self.patch_postion_embedding = UReaderPatchEmbeddings(config)
 
         self.post_init()
 
@@ -196,6 +113,7 @@ class UReaderAbstractorModel(UReaderPreTrainedModel):
         self,
         query_embeds: torch.FloatTensor,
         attention_mask: Optional[torch.FloatTensor] = None,
+        patch_positions: Optional[torch.LongTensor] = None,  # NOTE: 이게 추가 됨
         head_mask: Optional[torch.FloatTensor] = None,
         encoder_hidden_states: Optional[torch.FloatTensor] = None,
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
@@ -205,109 +123,62 @@ class UReaderAbstractorModel(UReaderPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple[torch.Tensor], BaseModelOutputWithPoolingAndCrossAttentions]:
-        r"""
-        encoder_hidden_states  (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, `optional`):
-            Sequence of hidden-states at the output of the last layer of the encoder. Used in the cross-attention if
-            the model is configured as a decoder.
-        encoder_attention_mask (`torch.FloatTensor` of shape `(batch_size, sequence_length)`, `optional`):
-            Mask to avoid performing attention on the padding token indices of the encoder input. This mask is used in
-            the cross-attention if the model is configured as a decoder. Mask values selected in `[0, 1]`:
-            - 1 for tokens that are **not masked**,
-            - 0 for tokens that are **masked**.
-        past_key_values (`tuple(tuple(torch.FloatTensor))` of length `config.n_layers` with each tuple having 4 tensors of:
-            shape `(batch_size, num_heads, sequence_length - 1, embed_size_per_head)`): Contains precomputed key and
-            value hidden states of the attention blocks. Can be used to speed up decoding. If `past_key_values` are
-            used, the user can optionally input only the last `decoder_input_ids` (those that don't have their past key
-            value states given to this model) of shape `(batch_size, 1)` instead of all `decoder_input_ids` of shape
-            `(batch_size, sequence_length)`.
-        use_cache (`bool`, `optional`):
-            If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding (see
-            `past_key_values`).
-        """
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        if (self.config.position_embedding_type == "pre") and (not self.config.vision_cut_embedding):
+            patch_embedding = self.patch_postion_embedding(encoder_hidden_states, patch_positions)
+            cut_index = (patch_positions == 0).all(dim=1).nonzero(as_tuple=False).squeeze(1)
 
-        # past_key_values_length
-        past_key_values_length = (
-            past_key_values[0][0].shape[2] - self.config.query_length if past_key_values is not None else 0
-        )
+            patch_groups = []
+            start_index = 0
+            for index in cut_index:
+                patch_groups.append(patch_embedding[start_index:index].reshape(-1, patch_embedding.size(2)))
+                start_index = index
 
-        query_length = query_embeds.shape[1] if query_embeds is not None else 0
+            patch_groups.append(patch_embedding[start_index:].reshape(-1, patch_embedding.size(2)))
 
-        embedding_output = self.layernorm(query_embeds)
-        embedding_output = self.dropout(embedding_output)
+            patch_masks = [
+                torch.ones(group.size(0), dtype=torch.long, device=patch_embedding.device) for group in patch_groups
+            ]
 
-        input_shape = embedding_output.size()[:-1]
-        batch_size, seq_length = input_shape
-        device = embedding_output.device
+            encoder_hidden_states = nn.utils.rnn.pad_sequence(patch_groups, batch_first=True, padding_value=0)
+            encoder_attention_mask = nn.utils.rnn.pad_sequence(patch_masks, batch_first=True, padding_value=0)
 
-        if attention_mask is None:
-            attention_mask = torch.ones(((batch_size, seq_length + past_key_values_length)), device=device)
-
-        # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
-        # ourselves in which case we just need to make it broadcastable to all heads.
-        extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_shape, device)
-
-        # If a 2D or 3D attention mask is provided for the cross-attention
-        # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
-        if encoder_hidden_states is not None:
-            if isinstance(encoder_hidden_states, list):
-                encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states[0].size()
-            else:
-                encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states.size()
-            encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
-
-            if isinstance(encoder_attention_mask, list):
-                encoder_extended_attention_mask = [self.invert_attention_mask(mask) for mask in encoder_attention_mask]
-            elif encoder_attention_mask is None:
-                encoder_attention_mask = torch.ones(encoder_hidden_shape, device=device)
-                encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
-            else:
-                encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
-        else:
-            encoder_extended_attention_mask = None
-
-        # Prepare head mask if needed
-        # 1.0 in head_mask indicate we keep the head
-        # attention_probs has shape bsz x n_heads x N x N
-        # input head_mask has shape [num_heads] or [num_hidden_layers x num_heads]
-        # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
-        head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
-
-        encoder_outputs = self.encoder(
-            embedding_output,
-            attention_mask=extended_attention_mask,
+        q_former_outputs = super().forward(
+            query_embeds,
+            attention_mask=attention_mask,
             head_mask=head_mask,
             encoder_hidden_states=encoder_hidden_states,
-            encoder_attention_mask=encoder_extended_attention_mask,
+            encoder_attention_mask=encoder_attention_mask,
             past_key_values=past_key_values,
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-            query_length=query_length,
         )
-        sequence_output = encoder_outputs[0]
+        sequence_output = q_former_outputs[0]
         pooled_output = sequence_output[:, 0, :]
 
+        if (self.config.position_embedding_type == "post") and (not self.config.vision_cut_embedding):
+            sequence_output = self.patch_postion_embedding(sequence_output, patch_positions)
+
         if not return_dict:
-            return (sequence_output, pooled_output) + encoder_outputs[1:]
+            return (sequence_output, pooled_output) + q_former_outputs[1:]
 
         return BaseModelOutputWithPoolingAndCrossAttentions(
             last_hidden_state=sequence_output,
             pooler_output=pooled_output,
-            past_key_values=encoder_outputs.past_key_values,
-            hidden_states=encoder_outputs.hidden_states,
-            attentions=encoder_outputs.attentions,
-            cross_attentions=encoder_outputs.cross_attentions,
+            past_key_values=q_former_outputs.past_key_values,
+            hidden_states=q_former_outputs.hidden_states,
+            attentions=q_former_outputs.attentions,
+            cross_attentions=q_former_outputs.cross_attentions,
         )
 
 
-class UReaderModel(PreTrainedModel):
-    _tied_weights_keys = []
+class UReaderForConditionalGeneration(PreTrainedModel):
+    config_class = None
+    supports_gradient_checkpointing = True
+    base_model_prefix = "LlamaUReader"
+    # 이건 확인
+    _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(
         self,
@@ -341,10 +212,16 @@ class UReaderModel(PreTrainedModel):
         self.vision_model = vision_model
         self.language_model = language_model
 
+        self.vision_projection = torch.nn.Linear(config.hidden_size, config.language_config.hidden_size)
+        self.vision_eos_token = torch.nn.Parameter(torch.randn(1, 1, config.language_config.hidden_size))
+
+        nn.init.trunc_normal_(self.vision_eos_token, mean=0.0, std=self.config.initializer_range)
+
     def forward(
         self,
         input_ids: torch.LongTensor,
         pixel_values: Optional[torch.FloatTensor] = None,
+        patch_positions: Optional[torch.LongTensor] = None,
         vision_kwargs: Optional[Dict[str, Any]] = {},
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
@@ -363,7 +240,7 @@ class UReaderModel(PreTrainedModel):
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if pixel_values is not None:
+        if (pixel_values is not None) and (input_ids is not None):
             # NOTE: 다양한 vision encoder를 사용할 수 있기 때문에 각 값을 vision_kwargs로 받는다.
             vision_outputs = self.vision_model(pixel_values=pixel_values, **vision_kwargs)
             vision_embeds = vision_outputs.last_hidden_state
@@ -371,13 +248,35 @@ class UReaderModel(PreTrainedModel):
             vision_attention_mask = torch.ones(vision_embeds.size()[:-1], dtype=torch.long, device=vision_embeds.device)
             query_tokens = self.query_tokens.expand(vision_embeds.shape[0], -1, -1)
 
-            query_features = self.abstractor(
+            abstractor_outputs = self.abstractor(
                 query_embeds=query_tokens,
                 encoder_hidden_states=vision_embeds,
                 encoder_attention_mask=vision_attention_mask,
                 patch_positions=patch_positions,
             )
+            abstractor_last_hidden_states = abstractor_outputs[0]
 
+            vision_token = self.vision_projection(abstractor_last_hidden_states)
+            vision_eos_token = self.vision_eos_token.repeat(vision_token.shape[0], 1, 1)
+
+            language_model_embedding_layer = self.language_model.get_input_embeddings()
+            inputs_embeds = language_model_embedding_layer(input_ids)
+
+            img_idx = 0
+            for b in range(batch_size):
+                start = 0
+                result = []
+                if len(media_token_indices[b]) > 0:
+                    for i, pos in enumerate(media_token_indices[b][0]):
+                        if pos > start:
+                            result.append(text_embeds[b, start:pos])
+                        result.append(query_features[img_idx + i])
+                        start = pos + img_seq_length
+                if start < text_embeds.shape[1]:
+                    result.append(text_embeds[b, start:])
+
+                img_idx += media_token_indices[b][1]
+                text_chunk_embeds.append(torch.cat(result, dim=0))
         # NOTE: inputs_embeds가 input_ids보다 우선순위가 높아서 inputs_embeds`만` 사용함.
         language_outputs = self.language_model(
             input_ids=input_ids,
@@ -391,31 +290,3 @@ class UReaderModel(PreTrainedModel):
             return_dict=return_dict,
             cache_position=cache_position,
         )
-
-
-class LlamaUReaderForCausalLM(PreTrainedModel):
-    config_class = None
-    supports_gradient_checkpointing = True
-    base_model_prefix = "LlamaUReader"
-    # 이건 확인
-    _tied_weights_keys = ["lm_head.weight"]
-
-    def __init__(
-        self,
-        config,
-        vision_model: Optional[PreTrainedModel],
-        language_model: Optional[PreTrainedModel],
-    ) -> None:
-
-        self.model = UReaderModel(config, vision_model, language_model)
-
-    _tied_weights_keys = ["lm_head.weight"]
-
-    def __init__(
-        self,
-        config,
-        vision_model: Optional[PreTrainedModel],
-        language_model: Optional[PreTrainedModel],
-    ) -> None:
-
-        self.model = UReaderModel(config, vision_model, language_model)
