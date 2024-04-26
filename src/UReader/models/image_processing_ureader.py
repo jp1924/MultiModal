@@ -19,14 +19,11 @@ from typing import Dict, List, Optional, Union, Tuple
 import numpy as np
 
 from transformers.image_processing_utils import BaseImageProcessor, BatchFeature, get_size_dict
-from transformers.image_transforms import resize, to_channel_dimension_format
+from transformers.image_transforms import resize
 from transformers.image_utils import (
-    IMAGENET_STANDARD_MEAN,
-    IMAGENET_STANDARD_STD,
     ChannelDimension,
     ImageInput,
     PILImageResampling,
-    infer_channel_dimension_format,
     is_scaled_image,
     make_list_of_images,
     to_numpy_array,
@@ -35,23 +32,14 @@ from transformers.image_utils import (
     validate_preprocess_arguments,
 )
 from transformers.utils import TensorType, logging
-from datasets import load_dataset
-import torch
-from torchvision import transforms
-from torchvision.ops.boxes import box_area
-from torchvision.transforms import functional as F
-from torchvision.transforms.transforms import InterpolationMode
-from PIL import Image
 
 try:
     from einops import rearrange, repeat
-except:
-    raise ImportError()
-
+except ImportError:
+    raise ImportError("you must install einops, please run `pip install einops`")
 
 logger = logging.get_logger(__name__)
 
-# 이 anchors는 입력되는 img_size에 몇배에 해당하는지를 설명하는 지표라 보면 됨.
 DEFAULT_ANCHORS = [
     [1, 1],
     [1, 2],
@@ -102,7 +90,9 @@ DEFAULT_ANCHORS = [
     [5, 4],
     [10, 2],
 ]
-anchor_max = max([max(anchor) for anchor in DEFAULT_ANCHORS])
+
+IMAGENET_STANDARD_MEAN = (0.48145466, 0.4578275, 0.40821073)
+IMAGENET_STANDARD_STD = (0.26862954, 0.26130258, 0.27577711)
 
 
 class UReaderImageProcessor(BaseImageProcessor):
@@ -158,14 +148,11 @@ class UReaderImageProcessor(BaseImageProcessor):
         self.size = size
         self.resample = resample
         self.rescale_factor = rescale_factor
-        self.image_mean = (
-            image_mean if image_mean is not None else (0.48145466, 0.4578275, 0.40821073)
-        )
-        self.image_std = (
-            image_std if image_std is not None else (0.26862954, 0.26130258, 0.27577711)
-        )
+        self.image_mean = image_mean if image_mean is not None else IMAGENET_STANDARD_MEAN
+        self.image_std = image_std if image_std is not None else IMAGENET_STANDARD_STD
 
         # shortest_edge는 처리할 수 없음.
+        # anchor: List[List[int, int]]
         # t_x, t_y, b_x, b_y
         get_anchor_box = lambda anchor: (
             0,
@@ -174,7 +161,6 @@ class UReaderImageProcessor(BaseImageProcessor):
             anchor[1] * self.size["height"],
         )
         self.anchors = np.array([get_anchor_box(anchor) for anchor in anchors])
-        self.anchor_max = max([max(anchor) for anchor in anchors])
 
         self._valid_processor_keys = [
             "images",
@@ -246,11 +232,22 @@ class UReaderImageProcessor(BaseImageProcessor):
         self,
         image: np.ndarray,
         size: Dict[str, int],
-        anchors,
-    ):
-
-        # TODO: image는 PIL의 Image와 tensor로 바뀐 image가 들어올 수 있음. 확인
-        # 여기선 이미지 하나만 처리하도록 함.
+        anchors: Optional[List[List[int]]] = None,
+        do_rescale: Optional[bool] = None,
+        do_normalize: Optional[bool] = True,
+        rescale_factor: Optional[float] = None,
+        image_mean: Optional[Union[float, List[float]]] = None,
+        image_std: Optional[Union[float, List[float]]] = None,
+        data_format: Union[str, ChannelDimension] = ChannelDimension.FIRST,
+        input_data_format: Optional[Union[str, ChannelDimension]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        # processor.shape_adaptive_croping 할수 있기 때문에 이렇게 정의 함.
+        image_mean = image_mean if image_mean is not None else self.image_mean
+        image_std = image_std if image_std is not None else self.image_std
+        anchors = anchors if anchors is not None else self.anchors
+        rescale_factor = rescale_factor if rescale_factor is not None else self.rescale_factor
+        size = size if size is not None else self.size
+        size_dict = get_size_dict(size)
 
         # NOTE: PIL.Image를 numpy로 바꾸면 width, height가 뒤바뀜
         height = image.shape[0]
@@ -261,13 +258,56 @@ class UReaderImageProcessor(BaseImageProcessor):
         anchor = anchor[2:].tolist()  # b_x, b_y
         anchor_size_dict = {"width": anchor[0], "height": anchor[1]}
 
-        nocut_image = self.resize(image, self.size)
-        local_image = self.resize(image, anchor_size_dict)
+        nocut_image = self.resize(
+            image=image,
+            size=size_dict,
+            data_format=data_format,
+            input_data_format=input_data_format,
+        )
+        local_image = self.resize(
+            image=image,
+            size=anchor_size_dict,
+            data_format=data_format,
+            input_data_format=input_data_format,
+        )
 
-        nocut_image = rearrange(nocut_image, "H W C -> 1 H W C")
+        if do_rescale:
+            nocut_image = self.rescale(
+                image=nocut_image,
+                scale=rescale_factor,
+                input_data_format=input_data_format,
+            )
+            local_image = self.rescale(
+                image=local_image,
+                scale=rescale_factor,
+                input_data_format=input_data_format,
+            )
+
+        if do_normalize:
+            nocut_image = self.normalize(
+                nocut_image,
+                mean=image_mean,
+                std=image_std,
+                input_data_format=input_data_format,
+            )
+            local_image = self.normalize(
+                local_image,
+                mean=image_mean,
+                std=image_std,
+                input_data_format=input_data_format,
+            )
+
+        nocut_image = rearrange(
+            nocut_image,
+            "C H W -> 1 C H W" if data_format == ChannelDimension.FIRST else "H W C -> 1 H W C",
+        )
         local_image = rearrange(
             local_image,
-            "(num_H H) (num_W W) C -> (num_H num_W) H W C",
+            (
+                "C (num_H H) (num_W W) -> (num_H num_W) C H W"
+                if data_format == ChannelDimension.FIRST
+                else "(num_H H) (num_W W) C -> (num_H num_W) H W C"
+            ),
             W=self.size["width"],
             H=self.size["height"],
         )
@@ -286,13 +326,37 @@ class UReaderImageProcessor(BaseImageProcessor):
         pixel_values = np.concatenate([nocut_image, local_image], axis=0)
         patch_position = np.concatenate([nocut_patch, local_patch], axis=0)
 
-        pixel_values = self.normalize(
-            self.rescale(image=pixel_values, scale=self.rescale_factor),
-            mean=self.image_mean,
-            std=self.image_std,
-        )
+        return (pixel_values, patch_position)
 
-        return
+    def pad(self, images: List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
+        # huggingface에 있는 logest나 maximum과 같은 기능은 없음. 추후 추가할지는 미지수
+        max_seq = max([x.shape[0] for x in images])
+
+        image_ls = list()
+        mask_ls = list()
+        for image in images:
+            cur_seq = image.shape[0]
+
+            image, mask = self._pad(image, max_seq, cur_seq)
+
+            mask_ls.append(mask)
+            image_ls.append(image)
+
+        padding_mask = np.stack(mask_ls)
+        padded_value = np.stack(image_ls)
+        return (padded_value, padding_mask)
+
+    def _pad(
+        self,
+        image: np.ndarray,
+        max_seq: int,
+        cur_seq: int,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        pad_width = (0, max_seq - cur_seq), (0, 0), (0, 0), (0, 0)
+        image = np.pad(image, pad_width, "constant", constant_values=0)
+        mask = np.concatenate([np.ones(cur_seq), np.zeros(max_seq - cur_seq)])
+
+        return (image, mask)
 
     def resize(
         self,
@@ -356,10 +420,12 @@ class UReaderImageProcessor(BaseImageProcessor):
         image_std: Optional[Union[float, List[float]]] = None,
         return_tensors: Optional[Union[str, TensorType]] = None,
         data_format: Union[str, ChannelDimension] = ChannelDimension.FIRST,
-        input_data_format: Optional[Union[str, ChannelDimension]] = None,
         anchors: Optional[List[List[int]]] = None,
+        input_data_format: Optional[Union[str, ChannelDimension]] = None,
+        patch_padding: bool = True,
+        return_padding_mask: bool = True,
         **kwargs,
-    ):
+    ) -> Dict[str, Union[List[np.ndarray], np.ndarray]]:
         """
         Preprocess an image or batch of images.
 
@@ -405,7 +471,6 @@ class UReaderImageProcessor(BaseImageProcessor):
                 - `"none"` or `ChannelDimension.NONE`: image in (height, width) format.
         """
         do_rescale = do_rescale if do_rescale is not None else self.do_rescale
-        do_rescale = do_rescale if do_rescale is not None else self.do_rescale
         do_normalize = do_normalize if do_normalize is not None else self.do_normalize
         resample = resample if resample is not None else self.resample
         rescale_factor = rescale_factor if rescale_factor is not None else self.rescale_factor
@@ -447,39 +512,44 @@ class UReaderImageProcessor(BaseImageProcessor):
                 " images have pixel values between 0 and 1, set `do_rescale=False` to avoid rescaling them again."
             )
 
-        if input_data_format is None:
-            # We assume that all images have the same channel dimension format.
-            input_data_format = infer_channel_dimension_format(images[0])
+        image_ls = list()
+        patch_position_ls = list()
+        for image in images:
+            # NOTE: patch_seq, hegith, width, channel
+            image, patch_position = self.shape_adaptive_croping(
+                image=image,
+                size=size_dict,
+                anchors=anchors,
+                do_rescale=do_rescale,
+                do_normalize=do_normalize,
+                rescale_factor=rescale_factor,
+                image_mean=image_mean,
+                image_std=image_std,
+                input_data_format=input_data_format,
+                data_format=data_format,
+            )
 
-        images = [self.shape_adaptive_croping(image, size, anchors) for image in images]
+            image_ls.append(image)
+            patch_position_ls.append(patch_position)
 
-        if do_rescale:
-            images = [
-                self.rescale(image=image, scale=rescale_factor, input_data_format=input_data_format)
-                for image in images
-            ]
-
-        if do_normalize:
-            images = [
-                self.normalize(
-                    image=image, mean=image_mean, std=image_std, input_data_format=input_data_format
-                )
-                for image in images
-            ]
-
-        # TODO: 디버깅 해볼 것
-        exit()
-
-        images = [
-            to_channel_dimension_format(image, data_format, input_channel_dim=input_data_format)
-            for image in images
-        ]
-
+        images = image_ls[0] if len(image_ls) == 1 else image_ls
         data = {"pixel_values": images}
+
+        if patch_padding:
+            images, patch_padding_mask = self.pad(image_ls)
+            data["pixel_values"] = images
+
+            if return_padding_mask:
+                data.update({"patch_mask": patch_padding_mask})
+
+        # NOTE to_channel_dimension_format는 3차원 리스트로 구성된 이미지에만 적용될 수 있음. 그래서 UReader에선 SAM이 적용된 후의 to_channel_dimension_format를 적용할 수 없음.
+        # if input_data_format is None:
+        #     # We assume that all images have the same channel dimension format.
+        #     input_data_format = infer_channel_dimension_format(images[0])
+
+        # images = [
+        #     to_channel_dimension_format(image, data_format, input_channel_dim=input_data_format)
+        #     for image in images
+        # ]
+
         return BatchFeature(data=data, tensor_type=return_tensors)
-
-
-processor = UReaderImageProcessor()
-
-image = data["train"][0]["image"]
-processor(image)
