@@ -160,6 +160,7 @@ class UReaderImageProcessor(BaseImageProcessor):
             anchor[0] * self.size["width"],
             anchor[1] * self.size["height"],
         )
+        self.max_anchor = max([max(anchor) for anchor in anchors])
         self.anchors = np.array([get_anchor_box(anchor) for anchor in anchors])
 
         self._valid_processor_keys = [
@@ -321,7 +322,7 @@ class UReaderImageProcessor(BaseImageProcessor):
         # num_patch, (ph,pw)
         local_patch = np.concatenate([x_axis, y_axis], axis=2)
         local_patch = rearrange(local_patch, "num_h num_w p-> (num_h num_w) p", p=2)
-        nocut_patch = np.ones((1, 2), dtype=np.int32) * anchor_max
+        nocut_patch = np.ones((1, 2), dtype=np.int32) * self.max_anchor
 
         pixel_values = np.concatenate([nocut_image, local_image], axis=0)
         patch_position = np.concatenate([nocut_patch, local_patch], axis=0)
