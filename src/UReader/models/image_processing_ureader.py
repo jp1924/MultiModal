@@ -335,7 +335,7 @@ class UReaderImageProcessor(BaseImageProcessor):
 
         return local_image
 
-    def shape_adaptive_croping_module(
+    def shape_adaptive_croping(
         self,
         nocut_image: np.ndarray,  # C H W
         local_image: np.ndarray,  # C H W
@@ -527,6 +527,7 @@ class UReaderImageProcessor(BaseImageProcessor):
         #       원본 UReader의 doc_processor를 최대한 모방하는 것을 목표로 만들었기 때문에 ChannelDimension.FIRST로 함.
         #       실제 UReader의 doc_processor 상에서 통과하는 F.to_tensor() or ToTensor() 기능을 따라가기 위함.
 
+        # 여기서 부터 SAM의 시작임.
         do_resize = True
         if do_resize:
             nocut_images = [
@@ -601,7 +602,7 @@ class UReaderImageProcessor(BaseImageProcessor):
         pixel_value_ls = list()
         patch_position_ls = list()
         for nocut_image, local_image in zip(nocut_images, local_images):
-            pixel_values, patch_position = self.shape_adaptive_croping_module(
+            pixel_values, patch_position = self.shape_adaptive_croping(
                 nocut_image=nocut_image,
                 local_image=local_image,
                 size=size,
