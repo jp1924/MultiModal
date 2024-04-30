@@ -425,8 +425,7 @@ class UReaderImageProcessor(BaseImageProcessor):
         data_format: Union[str, ChannelDimension] = ChannelDimension.FIRST,
         input_data_format: Optional[Union[str, ChannelDimension]] = None,
         anchors: Optional[List[List[int]]] = None,
-        patch_padding: bool = True,
-        return_padding_mask: bool = False,
+        return_patch_position_masks: bool = False,
         **kwargs,
     ) -> Dict[str, Union[List[np.ndarray], np.ndarray]]:
         """
@@ -613,12 +612,11 @@ class UReaderImageProcessor(BaseImageProcessor):
             pixel_value_ls.append(pixel_values)
             patch_position_ls.append(patch_position)
 
-        if patch_padding:
-            pixel_values, patch_padding_mask = self.pad(pixel_value_ls)
-            patch_positions, _ = self.pad(patch_position_ls)
-            data = {"pixel_values": pixel_values, "patch_positions": patch_positions}
+        pixel_values, patch_padding_mask = self.pad(pixel_value_ls)
+        patch_positions, _ = self.pad(patch_position_ls)
+        data = {"pixel_values": pixel_values, "patch_positions": patch_positions}
 
-        if return_padding_mask:
+        if return_patch_position_masks:
             data["patch_position_mask"] = patch_padding_mask
 
         return BatchFeature(data=data, tensor_type=return_tensors)
