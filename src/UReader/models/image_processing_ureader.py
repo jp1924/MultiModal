@@ -531,7 +531,7 @@ class UReaderImageProcessor(BaseImageProcessor):
             nocut_images = [
                 self.normal_resize(
                     image=image,
-                    size=size,
+                    size=size_dict,
                     resample=resample,
                     data_format=ChannelDimension.FIRST,
                     input_data_format=input_data_format,
