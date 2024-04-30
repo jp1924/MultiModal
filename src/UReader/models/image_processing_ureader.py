@@ -195,127 +195,6 @@ class UReaderImageProcessor(BaseImageProcessor):
 
         return iou
 
-    def get_preper_anchor(self, width: int, height: int, anchors: np.ndarray):
-        image_box = np.array([[0, 0, width, height]])
-
-        aspect_ratio_y = height * anchors[:, 2]
-        aspect_ratio_y = aspect_ratio_y / width
-        aspect_ratio_y = aspect_ratio_y.reshape(-1, 1)
-
-        aspect_ratio_anchor = np.concatenate([anchors[:, :3], aspect_ratio_y], -1)
-
-        anchor_num = anchors.shape[0]
-        image_box = image_box.repeat(anchor_num, 0)
-
-        S_rr = self.caculate_iou(image_box, anchors)
-        S_ra = self.caculate_iou(aspect_ratio_anchor, anchors)
-
-        preper_anchor_idx = ((S_ra * 100) + S_rr).argmax()
-        selected_anchor = anchors[preper_anchor_idx]
-
-        return selected_anchor
-
-    def shape_adaptive_croping(
-        self,
-        image: np.ndarray,
-        size: Dict[str, int],
-        anchors: Optional[List[List[int]]] = None,
-        resample: Optional[int] = PILImageResampling.BICUBIC,
-        do_rescale: Optional[bool] = None,
-        do_normalize: Optional[bool] = True,
-        rescale_factor: Optional[float] = None,
-        image_mean: Optional[Union[float, List[float]]] = None,
-        image_std: Optional[Union[float, List[float]]] = None,
-        data_format: Union[str, ChannelDimension] = ChannelDimension.LAST,
-        input_data_format: Optional[Union[str, ChannelDimension]] = None,
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        # processor.shape_adaptive_croping 할수 있기 때문에 이렇게 정의 함.
-        image_mean = image_mean if image_mean is not None else self.image_mean
-        image_std = image_std if image_std is not None else self.image_std
-        anchors = anchors if anchors is not None else self.anchors
-        rescale_factor = rescale_factor if rescale_factor is not None else self.rescale_factor
-        size = size if size is not None else self.size
-        size_dict = get_size_dict(size)
-
-        # NOTE: PIL.Image를 numpy로 바꾸면 width, height가 뒤바뀜
-        height = image.shape[0]
-        width = image.shape[1]
-
-        anchor = self.get_preper_anchor(width, height, anchors)  # t_x, t_y, b_x, b_y
-
-        anchor = anchor[2:].tolist()  # b_x, b_y
-        anchor_size_dict = {"width": anchor[0], "height": anchor[1]}
-
-        # NOTE: SAM에서 resize는 선택이 아니라 필수임.
-        nocut_image = self.resize(
-            image=image,
-            size=size_dict,
-            resample=resample,
-            data_format=data_format,
-            input_data_format=input_data_format,
-        )
-        local_image = self.resize(
-            image=image,
-            size=anchor_size_dict,
-            resample=resample,
-            data_format=data_format,
-            input_data_format=input_data_format,
-        )
-
-        if do_rescale:
-            # NOTE: ChannelDimension.FIRST로 하는 이유는 원본 코드의 F.to_tensor()를 따라가기 위함.
-            #       실재 input output을 line by line으로 비교할 때 이렇게 동작함.
-            nocut_image = self.rescale(
-                image=nocut_image,
-                scale=rescale_factor,
-                data_format=ChannelDimension.FIRST,
-                input_data_format=input_data_format,
-            )
-            local_image = self.rescale(
-                image=local_image,
-                scale=rescale_factor,
-                data_format=ChannelDimension.FIRST,
-                input_data_format=input_data_format,
-            )
-
-        if do_normalize:
-            nocut_image = self.normalize(
-                nocut_image,
-                mean=image_mean,
-                std=image_std,
-                input_data_format=input_data_format,
-            )
-            local_image = self.normalize(
-                local_image,
-                mean=image_mean,
-                std=image_std,
-                input_data_format=input_data_format,
-            )
-
-        nocut_image = rearrange(nocut_image, "C H W -> 1 C H W")
-        local_image = rearrange(
-            local_image,
-            "C (num_H H) (num_W W) -> (num_H num_W) C H W",
-            W=self.size["width"],
-            H=self.size["height"],
-        )
-
-        anchor_height = anchor_size_dict["height"] // self.size["height"]
-        anchor_width = anchor_size_dict["width"] // self.size["width"]
-
-        x_axis = repeat(np.arange(anchor_height), "num_h -> num_h num_w 1", num_w=anchor_width)
-        y_axis = repeat(np.arange(anchor_width), "num_w -> num_h num_w 1", num_h=anchor_height)
-
-        # num_patch, (ph,pw)
-        local_patch = np.concatenate([x_axis, y_axis], axis=2)
-        local_patch = rearrange(local_patch, "num_h num_w p-> (num_h num_w) p", p=2)
-        nocut_patch = np.ones((1, 2), dtype=np.int32) * self.max_anchor
-
-        pixel_values = np.concatenate([nocut_image, local_image], axis=0)
-        patch_position = np.concatenate([nocut_patch, local_patch], axis=0)
-
-        return (pixel_values, patch_position)
-
     def pad(self, images: List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
         # huggingface에 있는 logest나 maximum과 같은 기능은 없음. 추후 추가할지는 미지수
         max_seq = max([x.shape[0] for x in images])
@@ -356,9 +235,9 @@ class UReaderImageProcessor(BaseImageProcessor):
         self,
         **kwargs,
     ) -> np.ndarray:
+        # 그냥 사용할 일 있을 까봐 이렇게 넣어 둠.
         return self.normal_resize(**kwargs)
 
-    # resize 대체
     def normal_resize(
         self,
         image: np.ndarray,
@@ -409,7 +288,6 @@ class UReaderImageProcessor(BaseImageProcessor):
             **kwargs,
         )
 
-    # get_preper_anchor 대체
     def anchor_resize(
         self,
         image: np.ndarray,
@@ -455,7 +333,6 @@ class UReaderImageProcessor(BaseImageProcessor):
 
         return local_image
 
-    # shape_adaptive_croping 대체
     def shape_adaptive_croping_module(
         self,
         nocut_image: np.ndarray,  # C H W
