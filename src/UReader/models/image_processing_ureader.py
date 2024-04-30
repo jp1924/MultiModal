@@ -149,7 +149,6 @@ class UReaderImageProcessor(BaseImageProcessor):
 
         self._valid_processor_keys = [
             "images",
-            "do_resize",
             "size",
             "resample",
             "do_rescale",
@@ -160,6 +159,9 @@ class UReaderImageProcessor(BaseImageProcessor):
             "return_tensors",
             "data_format",
             "input_data_format",
+            "anchors",
+            "patch_padding",
+            "return_padding_mask",
         ]
 
     def caculate_iou(self, box1: np.ndarray, box2: np.ndarray):
