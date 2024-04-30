@@ -19,11 +19,12 @@ from typing import Dict, List, Optional, Union, Tuple
 import numpy as np
 
 from transformers.image_processing_utils import BaseImageProcessor, BatchFeature, get_size_dict
-from transformers.image_transforms import resize
+from transformers.image_transforms import resize, to_channel_dimension_format
 from transformers.image_utils import (
     ChannelDimension,
     ImageInput,
     PILImageResampling,
+    infer_channel_dimension_format,
     is_scaled_image,
     make_list_of_images,
     to_numpy_array,
@@ -32,67 +33,51 @@ from transformers.image_utils import (
     validate_preprocess_arguments,
 )
 from transformers.utils import TensorType, logging
+import torch
+from torchvision import transforms
+from torchvision.ops.boxes import box_area
+from torchvision.transforms import functional as F
+from torchvision.transforms.transforms import InterpolationMode
+from PIL import Image
 
 try:
     from einops import rearrange, repeat
-except ImportError:
-    raise ImportError("you must install einops, please run `pip install einops`")
+except:
+    raise ImportError()
+
 
 logger = logging.get_logger(__name__)
 
+# copied from UReader > pipeline > data_utils > processors > doc_processor > DocPretrainProcessor
 DEFAULT_ANCHORS = [
-    [1, 1],
-    [1, 2],
-    [2, 1],
-    [1, 3],
-    [3, 1],
-    [1, 4],
-    [2, 2],
-    [4, 1],
-    [1, 5],
-    [5, 1],
-    [1, 6],
-    [2, 3],
-    [3, 2],
-    [6, 1],
-    [1, 7],
-    [7, 1],
-    [1, 8],
-    [2, 4],
-    [4, 2],
-    [8, 1],
-    [1, 9],
-    [3, 3],
-    [9, 1],
-    [1, 10],
-    [2, 5],
-    [5, 2],
-    [10, 1],
-    [1, 11],
-    [11, 1],
-    [2, 6],
-    [3, 4],
-    [4, 3],
-    [6, 2],
-    [2, 7],
-    [7, 2],
-    [3, 5],
-    [5, 3],
-    [2, 8],
-    [4, 4],
-    [8, 2],
-    [2, 9],
-    [3, 6],
-    [6, 3],
-    [9, 2],
-    [2, 10],
-    [4, 5],
-    [5, 4],
-    [10, 2],
+    (1, 1),
+    (1, 2),
+    (2, 1),
+    (1, 3),
+    (3, 1),
+    (2, 2),
+    (1, 4),
+    (4, 1),
+    (1, 5),
+    (5, 1),
+    (1, 6),
+    (6, 1),
+    (2, 3),
+    (3, 2),
+    (1, 7),
+    (7, 1),
+    (4, 2),
+    (2, 4),
+    (1, 8),
+    (8, 1),
+    (3, 3),
+    (1, 9),
+    (9, 1),
 ]
 
-IMAGENET_STANDARD_MEAN = (0.48145466, 0.4578275, 0.40821073)
-IMAGENET_STANDARD_STD = (0.26862954, 0.26130258, 0.27577711)
+# copied from UReader > pipeline > data_utils > processors > doc_processor > DocPretrainProcessor
+UREADER_STANDARD_MEAN = (0.48145466, 0.4578275, 0.40821073)
+UREADER_STANDARD_STD = (0.26862954, 0.26130258, 0.27577711)
 
 
 class UReaderImageProcessor(BaseImageProcessor):
@@ -118,10 +103,10 @@ class UReaderImageProcessor(BaseImageProcessor):
         do_normalize (`bool`, *optional*, defaults to `True`):
             Whether to normalize the image. Can be overridden by the `do_normalize` parameter in the `preprocess`
             method.
-        image_mean (`float` or `List[float]`, *optional*, defaults to `IMAGENET_STANDARD_MEAN`):
+        image_mean (`float` or `List[float]`, *optional*, defaults to `UREADER_STANDARD_MEAN`):
             Mean to use if normalizing the image. This is a float or list of floats the length of the number of
             channels in the image. Can be overridden by the `image_mean` parameter in the `preprocess` method.
-        image_std (`float` or `List[float]`, *optional*, defaults to `IMAGENET_STANDARD_STD`):
+        image_std (`float` or `List[float]`, *optional*, defaults to `UREADER_STANDARD_STD`):
             Standard deviation to use if normalizing the image. This is a float or list of floats the length of the
             number of channels in the image. Can be overridden by the `image_std` parameter in the `preprocess` method.
     """
@@ -131,7 +116,7 @@ class UReaderImageProcessor(BaseImageProcessor):
     def __init__(
         self,
         size: Optional[Dict[str, int]] = None,
-        resample: PILImageResampling = PILImageResampling.BILINEAR,
+        resample: PILImageResampling = PILImageResampling.BICUBIC,
         do_rescale: bool = True,
         rescale_factor: Union[int, float] = 1 / 255,
         do_normalize: bool = True,
@@ -148,20 +133,19 @@ class UReaderImageProcessor(BaseImageProcessor):
         self.size = size
         self.resample = resample
         self.rescale_factor = rescale_factor
-        self.image_mean = image_mean if image_mean is not None else IMAGENET_STANDARD_MEAN
-        self.image_std = image_std if image_std is not None else IMAGENET_STANDARD_STD
+        self.image_mean = image_mean if image_mean is not None else UREADER_STANDARD_MEAN
+        self.image_std = image_std if image_std is not None else UREADER_STANDARD_STD
 
         # shortest_edge는 처리할 수 없음.
-        # anchor: List[List[int, int]]
         # t_x, t_y, b_x, b_y
         get_anchor_box = lambda anchor: (
             0,
             0,
-            anchor[0] * self.size["width"],
-            anchor[1] * self.size["height"],
+            anchor[1] * self.size["width"],
+            anchor[0] * self.size["height"],
         )
-        self.max_anchor = max([max(anchor) for anchor in anchors])
         self.anchors = np.array([get_anchor_box(anchor) for anchor in anchors])
+        self.max_anchor = max([max(anchor) for anchor in anchors])
 
         self._valid_processor_keys = [
             "images",
@@ -211,8 +195,7 @@ class UReaderImageProcessor(BaseImageProcessor):
 
         return iou
 
-    def get_preper_anchor(self, width: int, height: int, anchors: Optional[np.ndarray] = None):
-        anchors = anchors if anchors is not None else self.anchors
+    def get_preper_anchor(self, width: int, height: int, anchors: np.ndarray):
         image_box = np.array([[0, 0, width, height]])
 
         aspect_ratio_y = height * anchors[:, 2]
@@ -221,7 +204,10 @@ class UReaderImageProcessor(BaseImageProcessor):
 
         aspect_ratio_anchor = np.concatenate([anchors[:, :3], aspect_ratio_y], -1)
 
-        S_rr = self.caculate_iou(image_box.repeat(48, 0), anchors)
+        anchor_num = anchors.shape[0]
+        image_box = image_box.repeat(anchor_num, 0)
+
+        S_rr = self.caculate_iou(image_box, anchors)
         S_ra = self.caculate_iou(aspect_ratio_anchor, anchors)
 
         preper_anchor_idx = ((S_ra * 100) + S_rr).argmax()
@@ -234,12 +220,13 @@ class UReaderImageProcessor(BaseImageProcessor):
         image: np.ndarray,
         size: Dict[str, int],
         anchors: Optional[List[List[int]]] = None,
+        resample: Optional[int] = PILImageResampling.BICUBIC,
         do_rescale: Optional[bool] = None,
         do_normalize: Optional[bool] = True,
         rescale_factor: Optional[float] = None,
         image_mean: Optional[Union[float, List[float]]] = None,
         image_std: Optional[Union[float, List[float]]] = None,
-        data_format: Union[str, ChannelDimension] = ChannelDimension.FIRST,
+        data_format: Union[str, ChannelDimension] = ChannelDimension.LAST,
         input_data_format: Optional[Union[str, ChannelDimension]] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
         # processor.shape_adaptive_croping 할수 있기 때문에 이렇게 정의 함.
@@ -254,33 +241,40 @@ class UReaderImageProcessor(BaseImageProcessor):
         height = image.shape[0]
         width = image.shape[1]
 
-        anchor = self.get_preper_anchor(width, height)  # t_x, t_y, b_x, b_y
+        anchor = self.get_preper_anchor(width, height, anchors)  # t_x, t_y, b_x, b_y
 
         anchor = anchor[2:].tolist()  # b_x, b_y
         anchor_size_dict = {"width": anchor[0], "height": anchor[1]}
 
+        # NOTE: SAM에서 resize는 선택이 아니라 필수임.
         nocut_image = self.resize(
             image=image,
             size=size_dict,
+            resample=resample,
             data_format=data_format,
             input_data_format=input_data_format,
         )
         local_image = self.resize(
             image=image,
             size=anchor_size_dict,
+            resample=resample,
             data_format=data_format,
             input_data_format=input_data_format,
         )
 
         if do_rescale:
+            # NOTE: ChannelDimension.FIRST로 하는 이유는 원본 코드의 F.to_tensor()를 따라가기 위함.
+            #       실재 input output을 line by line으로 비교할 때 이렇게 동작함.
             nocut_image = self.rescale(
                 image=nocut_image,
                 scale=rescale_factor,
+                data_format=ChannelDimension.FIRST,
                 input_data_format=input_data_format,
             )
             local_image = self.rescale(
                 image=local_image,
                 scale=rescale_factor,
+                data_format=ChannelDimension.FIRST,
                 input_data_format=input_data_format,
             )
 
@@ -298,17 +292,10 @@ class UReaderImageProcessor(BaseImageProcessor):
                 input_data_format=input_data_format,
             )
 
-        nocut_image = rearrange(
-            nocut_image,
-            "C H W -> 1 C H W" if data_format == ChannelDimension.FIRST else "H W C -> 1 H W C",
-        )
+        nocut_image = rearrange(nocut_image, "C H W -> 1 C H W")
         local_image = rearrange(
             local_image,
-            (
-                "C (num_H H) (num_W W) -> (num_H num_W) C H W"
-                if data_format == ChannelDimension.FIRST
-                else "(num_H H) (num_W W) C -> (num_H num_W) H W C"
-            ),
+            "C (num_H H) (num_W W) -> (num_H num_W) C H W",
             W=self.size["width"],
             H=self.size["height"],
         )
@@ -353,7 +340,13 @@ class UReaderImageProcessor(BaseImageProcessor):
         max_seq: int,
         cur_seq: int,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        pad_width = (0, max_seq - cur_seq), (0, 0), (0, 0), (0, 0)
+        if len(image.shape) == 4:
+            pad_width = [(0, max_seq - cur_seq), (0, 0), (0, 0), (0, 0)]
+        elif len(image.shape) == 2:
+            pad_width = [(0, max_seq - cur_seq), (0, 0)]
+        else:
+            raise ValueError("Unexpected shape error!")
+
         image = np.pad(image, pad_width, "constant", constant_values=0)
         mask = np.concatenate([np.ones(cur_seq), np.zeros(max_seq - cur_seq)])
 
@@ -361,9 +354,16 @@ class UReaderImageProcessor(BaseImageProcessor):
 
     def resize(
         self,
+        **kwargs,
+    ) -> np.ndarray:
+        return self.normal_resize(**kwargs)
+
+    # resize 대체
+    def normal_resize(
+        self,
         image: np.ndarray,
         size: Dict[str, int],
-        resample: PILImageResampling = PILImageResampling.BILINEAR,
+        resample: PILImageResampling = PILImageResampling.BICUBIC,
         data_format: Optional[Union[str, ChannelDimension]] = None,
         input_data_format: Optional[Union[str, ChannelDimension]] = None,
         **kwargs,
@@ -376,8 +376,8 @@ class UReaderImageProcessor(BaseImageProcessor):
                 Image to resize.
             size (`Dict[str, int]`):
                 Dictionary in the format `{"height": int, "width": int}` specifying the size of the output image.
-            resample (`PILImageResampling`, *optional*, defaults to `PILImageResampling.BILINEAR`):
-                `PILImageResampling` filter to use when resizing the image e.g. `PILImageResampling.BILINEAR`.
+            resample (`PILImageResampling`, *optional*, defaults to `PILImageResampling.BICUBIC`):
+                `PILImageResampling` filter to use when resizing the image e.g. `PILImageResampling.BICUBIC`.
             data_format (`ChannelDimension` or `str`, *optional*):
                 The channel dimension format for the output image. If unset, the channel dimension format of the input
                 image is used. Can be one of:
@@ -409,11 +409,134 @@ class UReaderImageProcessor(BaseImageProcessor):
             **kwargs,
         )
 
+    # get_preper_anchor 대체
+    def anchor_resize(
+        self,
+        image: np.ndarray,
+        size: Dict[str, int],  # 무조건 dict 형태만 들어와야 함.
+        anchors: Optional[np.ndarray] = None,
+        resample: PILImageResampling = PILImageResampling.BICUBIC,
+        data_format: Optional[Union[str, ChannelDimension]] = None,
+        input_data_format: Optional[Union[str, ChannelDimension]] = None,
+    ):
+        anchors = anchors if anchors is not None else self.anchors
+        if "height" not in size or "width" not in size:
+            raise ValueError(
+                f"The `size` dictionary must contain the keys `height` and `width`. Got {size.keys()}"
+            )
+        # t_x, t_y, b_x, b_y
+        image_box = np.array([[0, 0, size["width"], size["height"]]])
+
+        aspect_ratio_y = size["height"] * anchors[:, 2]
+        aspect_ratio_y = aspect_ratio_y / size["width"]
+        aspect_ratio_y = aspect_ratio_y.reshape(-1, 1)
+
+        aspect_ratio_anchor = np.concatenate([anchors[:, :3], aspect_ratio_y], -1)
+
+        anchor_num = anchors.shape[0]
+        image_box = image_box.repeat(anchor_num, 0)
+
+        S_rr = self.caculate_iou(image_box, anchors)
+        S_ra = self.caculate_iou(aspect_ratio_anchor, anchors)
+
+        preper_anchor_idx = ((S_ra * 100) + S_rr).argmax()
+        selected_anchor = anchors[preper_anchor_idx]
+
+        anchor = selected_anchor[2:].tolist()  # b_x, b_y
+        anchor_size_dict = {"width": anchor[0], "height": anchor[1]}
+
+        local_image = self.normal_resize(
+            image=image,
+            size=anchor_size_dict,
+            resample=resample,
+            data_format=data_format,
+            input_data_format=input_data_format,
+        )
+
+        return local_image
+
+    # shape_adaptive_croping 대체
+    def shape_adaptive_croping_module(
+        self,
+        nocut_image: np.ndarray,  # C H W
+        local_image: np.ndarray,  # C H W
+        size: Dict[str, int],
+        data_format: Optional[Union[str, ChannelDimension]] = None,
+        input_data_format: Optional[Union[str, ChannelDimension]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        size_dict = get_size_dict(size)
+
+        if "height" not in size or "width" not in size:
+            raise ValueError(
+                f"The `size` dictionary must contain the keys `height` and `width`. Got {size.keys()}"
+            )
+
+        if input_data_format is None:
+            input_data_format = infer_channel_dimension_format(nocut_image)
+
+        anchor_size_dict = dict()
+
+        if input_data_format == ChannelDimension.FIRST:
+            anchor_size_dict["height"] = local_image.shape[1]
+            anchor_size_dict["width"] = local_image.shape[2]
+            nocut_pattern = "C H W -> 1 C H W"
+            local_pattern = "C (num_H H) (num_W W) -> (num_H num_W) C H W"
+
+        elif input_data_format == ChannelDimension.LAST:
+            anchor_size_dict["height"] = local_image.shape[0]
+            anchor_size_dict["width"] = local_image.shape[1]
+            nocut_pattern = "H W C -> 1 H W C"
+            local_pattern = "(num_H H) (num_W W) C -> (num_H num_W) H W C"
+
+        else:
+            raise ValueError("Unsupported channel dimension format")
+
+        # {"height": local_image.shape[1], "width": local_image.shape[2]}
+
+        nocut_image = rearrange(nocut_image, nocut_pattern)
+        local_image = rearrange(
+            local_image,
+            local_pattern,
+            W=size_dict["width"],
+            H=size_dict["height"],
+        )
+
+        anchor_height = anchor_size_dict["height"] // size_dict["height"]
+        anchor_width = anchor_size_dict["width"] // size_dict["width"]
+
+        x_axis = repeat(np.arange(anchor_height), "num_h -> num_h num_w 1", num_w=anchor_width)
+        y_axis = repeat(np.arange(anchor_width), "num_w -> num_h num_w 1", num_h=anchor_height)
+
+        # TODO: numpy에 구현되어 있는 rearrange를 사용해도 되지만 귀찮아서 이렇게 구현함. 나중에 바꿀 것
+        # num_patch, (ph,pw)
+        local_patch = np.concatenate([x_axis, y_axis], axis=2)
+        local_patch = rearrange(local_patch, "num_h num_w p-> (num_h num_w) p", p=2)
+        nocut_patch = np.ones((1, 2), dtype=np.int32) * self.max_anchor
+
+        pixel_values = np.concatenate([nocut_image, local_image], axis=0)
+        patch_position = np.concatenate([nocut_patch, local_patch], axis=0)
+
+        # copied from transformers > image_transforms.py > to_channel_dimension_format
+        target_channel_dim = ChannelDimension(data_format)
+        if input_data_format == target_channel_dim:
+            return (pixel_values, patch_position)
+
+        if data_format == ChannelDimension.FIRST:
+            # (2, 0, 1) > (0, 3, 1, 2)
+            pixel_values = pixel_values.transpose((0, 3, 1, 2))
+        elif data_format == ChannelDimension.LAST:
+            # (1, 2, 0) > (0, 2, 3, 1)
+            pixel_values = pixel_values.transpose((0, 2, 3, 1))
+        else:
+            raise ValueError("Unsupported channel dimension format: {}".format(data_format))
+
+        return (pixel_values, patch_position)
+
     def preprocess(
         self,
         images: ImageInput,
         size: Dict[str, int] = None,
-        resample: PILImageResampling = None,
+        resample: PILImageResampling = PILImageResampling.BICUBIC,  # UReader의 default는 PILImageResampling.BICUBIC임.
         do_rescale: Optional[bool] = None,
         rescale_factor: Optional[float] = None,
         do_normalize: Optional[bool] = None,
@@ -421,10 +544,10 @@ class UReaderImageProcessor(BaseImageProcessor):
         image_std: Optional[Union[float, List[float]]] = None,
         return_tensors: Optional[Union[str, TensorType]] = None,
         data_format: Union[str, ChannelDimension] = ChannelDimension.FIRST,
-        anchors: Optional[List[List[int]]] = None,
         input_data_format: Optional[Union[str, ChannelDimension]] = None,
+        anchors: Optional[List[List[int]]] = None,
         patch_padding: bool = True,
-        return_padding_mask: bool = True,
+        return_padding_mask: bool = False,
         **kwargs,
     ) -> Dict[str, Union[List[np.ndarray], np.ndarray]]:
         """
@@ -440,7 +563,7 @@ class UReaderImageProcessor(BaseImageProcessor):
                 Dictionary in the format `{"height": h, "width": w}` specifying the size of the output image after
                 resizing.
             resample (`PILImageResampling` filter, *optional*, defaults to `self.resample`):
-                `PILImageResampling` filter to use if resizing the image e.g. `PILImageResampling.BILINEAR`. Only has
+                `PILImageResampling` filter to use if resizing the image e.g. `PILImageResampling.BICUBIC`. Only has
                 an effect if `do_resize` is set to `True`.
             do_rescale (`bool`, *optional*, defaults to `self.do_rescale`):
                 Whether to rescale the image values between [0 - 1].
@@ -478,8 +601,8 @@ class UReaderImageProcessor(BaseImageProcessor):
         image_mean = image_mean if image_mean is not None else self.image_mean
         image_std = image_std if image_std is not None else self.image_std
         anchors = anchors if anchors is not None else self.anchors
-
         size = size if size is not None else self.size
+
         size_dict = get_size_dict(size)
 
         images = make_list_of_images(images)
@@ -513,44 +636,110 @@ class UReaderImageProcessor(BaseImageProcessor):
                 " images have pixel values between 0 and 1, set `do_rescale=False` to avoid rescaling them again."
             )
 
-        image_ls = list()
+        if input_data_format is None:
+            # We assume that all images have the same channel dimension format.
+            input_data_format = infer_channel_dimension_format(images[0])
+
+        # NOTE: if do_resize하는 이유
+        #       단순 코드 가독성을 위해, 이 코드는 VIT의 ImageProcessor를 기반으로 작성되었는데
+        #       코드는 만드는 도중 어느 구간이 resize, rescale, normalize를 하는 곳인지를 쉽게 구분하기 위해
+        #       이와 같이 if 문으로 구분하도록 함. UReader에서의 resize는 선택이 아니라 필수 임.
+
+        # NOTE: ChannelDimension.FIRST로 하는 이유
+        #       원본 UReader의 doc_processor를 최대한 모방하는 것을 목표로 만들었기 때문에 ChannelDimension.FIRST로 함.
+        #       실제 UReader의 doc_processor 상에서 통과하는 F.to_tensor() or ToTensor() 기능을 따라가기 위함.
+
+        do_resize = True
+        if do_resize:
+            nocut_images = [
+                self.normal_resize(
+                    image=image,
+                    size=size,
+                    resample=resample,
+                    data_format=ChannelDimension.FIRST,
+                    input_data_format=input_data_format,
+                )
+                for image in images
+            ]
+
+            # NOTE: get_image_size는 np.ndarray에서만 동작하는 걸 가정하고 만듬.
+            get_image_size: np.ndarray = lambda img: {"height": img.shape[0], "width": img.shape[1]}
+            local_images = [
+                self.anchor_resize(
+                    image=image,
+                    size=get_image_size(image),
+                    anchors=anchors,
+                    resample=resample,
+                    data_format=ChannelDimension.FIRST,
+                    input_data_format=input_data_format,
+                )
+                for image in images
+            ]
+
+        if do_rescale:
+            nocut_images = [
+                self.rescale(
+                    image=image,
+                    scale=rescale_factor,
+                    data_format=ChannelDimension.FIRST,
+                    input_data_format=ChannelDimension.FIRST,
+                )
+                for image in nocut_images
+            ]
+
+            local_images = [
+                self.rescale(
+                    image=image,
+                    scale=rescale_factor,
+                    data_format=ChannelDimension.FIRST,
+                    input_data_format=ChannelDimension.FIRST,
+                )
+                for image in local_images
+            ]
+
+        if do_normalize:
+            nocut_images = [
+                self.normalize(
+                    image,
+                    mean=image_mean,
+                    std=image_std,
+                    data_format=ChannelDimension.FIRST,
+                    input_data_format=ChannelDimension.FIRST,
+                )
+                for image in nocut_images
+            ]
+
+            local_images = [
+                self.normalize(
+                    image,
+                    mean=image_mean,
+                    std=image_std,
+                    data_format=ChannelDimension.FIRST,
+                    input_data_format=ChannelDimension.FIRST,
+                )
+                for image in local_images
+            ]
+
+        pixel_value_ls = list()
         patch_position_ls = list()
-        for image in images:
-            # NOTE: patch_seq, hegith, width, channel
-            image, patch_position = self.shape_adaptive_croping(
-                image=image,
-                size=size_dict,
-                anchors=anchors,
-                do_rescale=do_rescale,
-                do_normalize=do_normalize,
-                rescale_factor=rescale_factor,
-                image_mean=image_mean,
-                image_std=image_std,
-                input_data_format=input_data_format,
+        for nocut_image, local_image in zip(nocut_images, local_images):
+            pixel_values, patch_position = self.shape_adaptive_croping_module(
+                nocut_image=nocut_image,
+                local_image=local_image,
+                size=size,
                 data_format=data_format,
+                input_data_format=ChannelDimension.FIRST,
             )
 
-            image_ls.append(image)
+            pixel_value_ls.append(pixel_values)
             patch_position_ls.append(patch_position)
 
-        images = image_ls[0] if len(image_ls) == 1 else image_ls
-        data = {"pixel_values": images}
-
         if patch_padding:
-            images, patch_padding_mask = self.pad(image_ls)
-            data["pixel_values"] = images
+            pixel_values, patch_padding_mask = self.pad(pixel_value_ls)
+            patch_positions, _ = self.pad(patch_position_ls)
+            data = {"pixel_values": pixel_values, "patch_positions": patch_positions}
 
-            if return_padding_mask:
-                data.update({"patch_mask": patch_padding_mask})
-
-        # NOTE to_channel_dimension_format는 3차원 리스트로 구성된 이미지에만 적용될 수 있음. 그래서 UReader에선 SAM이 적용된 후의 to_channel_dimension_format를 적용할 수 없음.
-        # if input_data_format is None:
-        #     # We assume that all images have the same channel dimension format.
-        #     input_data_format = infer_channel_dimension_format(images[0])
-
-        # images = [
-        #     to_channel_dimension_format(image, data_format, input_channel_dim=input_data_format)
-        #     for image in images
-        # ]
+        if return_padding_mask:
+            data["patch_position_mask"] = patch_padding_mask
 
         return BatchFeature(data=data, tensor_type=return_tensors)
