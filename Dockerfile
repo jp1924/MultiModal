@@ -15,9 +15,7 @@ RUN apt-get update && \
 # 파이썬 관련 유틸
 RUN pip install -U pip wheel setuptools && \
     pip install transformers accelerate datasets evaluate && \
-    pip install trl peft bitsandbytes scipy sentencepiece deepspeed wandb pillow && \
-    pip install soundfile librosa jiwer torch-audiomentations && \
-    pip install setproctitle glances[gpu] && \
-    pip install ruff natsort && \
-    pip install torch==2.2.0+cu121 torchaudio==2.2.0+cu121 --index-url https://download.pytorch.org/whl/cu121 && \
+    pip install trl peft bitsandbytes scipy sentencepiece deepspeed wandb pillow einops && \
+    pip install ruff natsort setproctitle glances[gpu] && \
+    pip install torch==2.2.1+cu121 torchvision==0.17.1+cu121 --index-url https://download.pytorch.org/whl/cu121 && \
     pip install flash-attn==2.5.7
