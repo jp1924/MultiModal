@@ -81,6 +81,7 @@ class MplugOwlConfig(PretrainedConfig):
         vision_config_class = CONFIG_MAPPING[vision_model_type]
         language_config_class = CONFIG_MAPPING[language_model_type]
 
+        self.language_config["attn_implementation"] = self.attn_implementation
         self.vision_config = vision_config_class(**vision_config)
         self.language_config = language_config_class(**language_config)
         self.abstractor_config = MplugOwlAbstractorConfig(
