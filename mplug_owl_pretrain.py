@@ -1,17 +1,16 @@
 import os
-from typing import Any, Dict, List, Optional, Union
+import random
+from typing import Any, Dict, List, Optional, Tuple, Union
 
+import torch
 from datasets import Dataset, concatenate_datasets, load_dataset
-from models import (
-    MplugOwlAbstractorConfig,
-    MplugOwlConfig,
-    MplugOwlForCausalLM,
-    MplugOwlProcessor,
-)
+from models import MplugOwlAbstractorConfig, MplugOwlConfig, MplugOwlForCausalLM, MplugOwlProcessor
 from setproctitle import setproctitle
-from utils import MplugOwlPretrainingArguments
+from utils import SAFE_WEIGHTS_NAME, MplugOwlPretrainingArguments
 
 from transformers import (
+    AddedToken,
+    AutoConfig,
     AutoImageProcessor,
     AutoModel,
     AutoModelForCausalLM,
@@ -20,7 +19,6 @@ from transformers import (
     CLIPVisionModel,
     HfArgumentParser,
     Trainer,
-    TrainingArguments,
     is_torch_xla_available,
     is_wandb_available,
     set_seed,
@@ -34,14 +32,40 @@ logger = hf_logging.get_logger("transformers")
 global GLOBAL_LOGGER
 GLOBAL_LOGGER = None
 
+PROMPT = """### User:
+{img_token}
+{caption}
+
+### Assistant:
+"""
+
 
 def main(train_args: MplugOwlPretrainingArguments) -> None:
     def preprocessor(example: Dict[str, Union[List[Any], List[List[Any]]]]) -> Dict[str, List[Any]]:
-        return {
-            "labels": normalized_sentence_ls,
-            "input_values": normalized_audio_ls,
-            "length": length_ls,
+        image_ls = example["image"]
+        image_ls = image_ls if isinstance(image_ls, list) else [image_ls]
+
+        caption_ls_ls = example["caption_ls"]
+        caption_ls_ls = caption_ls_ls if isinstance(caption_ls_ls, list) else [caption_ls_ls]
+
+        data = {
+            "input_ids": [],
+            "pixel_values": [],
+            "lengths": [],
         }
+        for image, caption_ls in zip(image_ls, caption_ls_ls):
+            for caption in random.choices(caption_ls, k=3):
+                # NOTE: pt로 하면 무한로딩 걸림.
+                prompt = PROMPT.format(img_token="<|image|>", caption=caption)
+                outputs = processor(text=prompt, images=image, return_tensors="np", return_attention_mask=False)
+
+                data["input_ids"].append(outputs["input_ids"])
+                data["pixel_values"].append(outputs["pixel_values"])
+                # 길이 확인할 것
+                breakpoint()
+                data["lengths"].append(len(outputs["input_ids"]) + len(outputs["pixel_values"]))
+
+        return data
 
     def collect_dataset(prefix_ls: List[str]) -> Optional[Dataset]:
         if not prefix_ls:
@@ -84,38 +108,71 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
             GLOBAL_LOGGER.watch(model, log=_watch_model, log_freq=max(100, train_args.logging_steps))
         GLOBAL_LOGGER.run._label(code="transformers_trainer")
 
-    model_path = train_args.resume_from_checkpoint or train_args.model_name_or_path
+    def get_mplug_owl(train_args: MplugOwlPretrainingArguments) -> Tuple[MplugOwlForCausalLM, MplugOwlProcessor]:
+        if train_args.vision_model_name_or_path and train_args.language_model_name_or_path:
+            raise ValueError
+
+        image_processor = AutoImageProcessor.from_pretrained(train_args.vision_model_name_or_path)
+        tokenizer = AutoTokenizer.from_pretrained(train_args.language_model_name_or_path)
+        tokenizer.add_tokens(AddedToken("<|image|>", special=True, normalized=False), special_tokens=True)
+
+        new_vocab_size = len(tokenizer.get_vocab())
+
+        language_config = AutoConfig.from_pretrained(
+            train_args.language_model_name_or_path,
+            vocab_size=new_vocab_size,
+            padding_idx=tokenizer.pad_token_id,
+            pad_token_id=tokenizer.pad_token_id,
+            bos_token_id=tokenizer.bos_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+            unk_token_id=tokenizer.unk_token_id,
+            attn_implementation=train_args.attn_implementation,
+        )
+        vision_config = AutoConfig.from_pretrained(train_args.vision_model_name_or_path)
+
+        vision_model = AutoModel.from_pretrained(train_args.vision_model_name_or_path, config=vision_config)
+        language_model = AutoModelForCausalLM.from_pretrained(
+            train_args.language_model_name_or_path, config=language_config
+        )
+
+        if isinstance(vision_model, CLIPModel):
+            vision_model = CLIPVisionModel.from_pretrained(train_args.vision_model_name_or_path, config=vision_config)
+
+        abstractor_config = MplugOwlAbstractorConfig(
+            num_hidden_layers=train_args.abstractor_num_hidden_layers,
+            num_attention_heads=train_args.abstractor_num_attention_heads,
+            intermediate_size=train_args.abstractor_intermediate_size,
+            attention_probs_dropout_prob=train_args.abstractor_attention_probs_dropout_prob,
+            layer_norm_eps=train_args.abstractor_layer_norm_eps,
+            encoder_hidden_size=train_args.abstractor_encoder_hidden_size,
+        )
+        config = MplugOwlConfig(
+            vision_config=vision_config.to_dict(),
+            language_config=language_config.to_dict(),
+            abstractor_config=abstractor_config.to_dict(),
+            img_token_ids=train_args.img_token_ids,
+            num_query_tokens=train_args.num_query_tokens,
+            num_query_seq=train_args.num_query_seq,
+            ignore_ids=train_args.ignore_ids,
+            vision_projection_bias=train_args.vision_projection_bias,
+        )
+
+        model = MplugOwlForCausalLM(config=config)
+        model.set_language_model(language_model)
+        model.set_vision_model(vision_model)
+
+        processor = MplugOwlProcessor(image_processor, tokenizer)
+
+        return (model, processor)
+
+    model_name_or_path = train_args.resume_from_checkpoint or train_args.model_name_or_path
 
     # load model, feature_extractor, tokenizer
-    if os.path.exists(os.path.join(model_path, SAFE_WEIGHTS_NAME)):
-        model = MplugOwlForCausalLM.from_pretrained(model_path)
-        processor = MplugOwlProcessor.from_pretrained(model_path)
+    if os.path.exists(os.path.join(model_name_or_path, SAFE_WEIGHTS_NAME)):
+        model = MplugOwlForCausalLM.from_pretrained(model_name_or_path)
+        processor = MplugOwlProcessor.from_pretrained(model_name_or_path)
     else:
-        vision_model = AutoModel.from_pretrained(train_args.vision_model_name_or_path)
-        language_model = AutoModelForCausalLM.from_pretrained(train_args.language_model_name_or_path)
-        if isinstance(vision_model, CLIPModel):
-            vision_model = CLIPVisionModel.from_pretrained(train_args.vision_model_name_or_path)
-
-        abstractor_config = MplugOwlAbstractorConfig()
-        config = MplugOwlConfig(
-            attn_implementation=train_args.attn_implementation,
-            vision_config=vision_model.config,
-            language_config=language_model.config,
-            abstractor_config=abstractor_config,
-        )
-
-        model = MplugOwlForCausalLM(
-            config=config,
-            vision_model=vision_model,
-            language_model=language_model,
-        )
-
-        model.language_model
-        model.vision_model
-
-        tokenizer = AutoTokenizer.from_pretrained(train_args.language_model_name_or_path)
-        image_processor = AutoImageProcessor.from_pretrained(train_args.vision_model_name_or_path)
-        processor = MplugOwlProcessor(image_processor, tokenizer)
+        model, processor = get_mplug_owl(train_args)
 
     # NOTE: Trainer에서 자동으로 해줌, 하지만 확인을 위해 이렇게 선언 함.
     if train_args.gradient_checkpointing:
@@ -143,8 +200,6 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
                 name = dataset_name.split("/")[-1]
                 cache_file_name = {x: get_cache_path(x) for x in dataset}
 
-            # NOTE: finetune에서 사용할 데이터 Pretrain에서 전처리 함
-            # 만약 순수 음성만 넣을 거라면 sentence 부분을 ""로 비워든 상태로 돌리면 정상적으로 진행 됨
             dataset = dataset.map(
                 preprocessor,
                 num_proc=train_args.preprocessing_num_workers,
@@ -155,6 +210,7 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
                 remove_columns=column_names,
                 desc=f"preprocess-{dataset_name}",
             )
+
         for data_key in dataset:
             if data_key not in data_dict:
                 data_dict[data_key] = []
@@ -195,6 +251,48 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
         train_dataset=train_dataset,
         eval_dataset=valid_dataset_dict,
     )
+    if train_args.do_train and train_dataset:
+        train(trainer)
+
+    if train_args.do_eval and valid_dataset:
+        valid(trainer)
+
+    if train_args.do_predict and test_dataset:
+        predict(trainer, test_dataset)
+
+
+def train(trainer: Trainer) -> None:
+    train_args: MplugOwlPretrainingArguments = trainer.args
+    trainer.train(resume_from_checkpoint=train_args.resume_from_checkpoint)
+
+    save_dir = os.path.join(train_args.output_dir, "last_model")
+    trainer.save_model(save_dir)
+    # trainer 특성 때문에 save_metrics 안됨.
+
+
+@torch.no_grad()
+def valid(trainer: Trainer, valid_datasets: Optional[Union[Dataset, Dict[str, Dataset]]] = None) -> None:
+    valid_datasets = valid_datasets if valid_datasets else trainer.eval_dataset
+    trainer.evaluate(valid_datasets)
+
+
+@torch.no_grad()
+def predict(trainer: Trainer, test_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None) -> None:
+    test_dataset_dict = dict()
+    test_name_ls = test_dataset["dataset_name"]
+    for dataset_name in set(test_name_ls):
+        part_idx = [idx for idx, x in enumerate(test_name_ls) if x == dataset_name]
+        part_dataset = test_dataset.select(part_idx, keep_in_memory=False)
+
+        # 'jp1924/KconfSpeech-validation'
+        start = dataset_name.rindex("/") + 1
+        end = dataset_name.rindex("-")
+
+        outputs = trainer.predict(part_dataset, metric_key_prefix=f"test/{dataset_name[start:]}")
+        # NOTE: trainer.log를 사용하면 train/test 처럼 찍혀서 나와서 wandb로 직접 찍음
+        if GLOBAL_LOGGER:
+            GLOBAL_LOGGER.log(outputs.metrics)
+        test_dataset_dict[dataset_name[start:end]] = part_dataset
 
 
 if "__main__" in __name__:
