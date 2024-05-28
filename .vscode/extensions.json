@@ -1,10 +1,10 @@
 {
     "recommendations": [
         "ms-python.Python",
-        "ms-python.isort",
-        "ms-python.Flake8",
+        // "ms-python.isort",
+        // "ms-python.Flake8",
+        // "ms-python.black-formatter",
         "ms-python.debugpy",
-        "ms-python.black-formatter",
         "DavidAnson.vscode-markdownlint",
         "eamodio.gitlens",
         "donjayamanne.githistory",
