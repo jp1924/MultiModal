@@ -1,1 +1,3 @@
+from transformers.utils import SAFE_WEIGHTS_NAME
+
 from .pretraining_args import MplugOwlPretrainingArguments
