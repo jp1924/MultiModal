@@ -63,14 +63,6 @@ class MplugOwlPretrainingArguments(TrainingArguments):
         default=None,
         metadata={"help": ""},
     )
-    img_token_ids: int = field(
-        default=None,
-        metadata={"help": ""},
-    )
-    num_query_seq: int = field(
-        default=None,
-        metadata={"help": ""},
-    )
     num_query_tokens: int = field(
         default=None,
         metadata={"help": ""},
@@ -112,3 +104,6 @@ class MplugOwlPretrainingArguments(TrainingArguments):
         default=None,
         metadata={"help": ""},
     )
+
+
+MplugOwlPretrainingArguments()
