@@ -28,6 +28,7 @@ from transformers import logging as hf_logging
 
 hf_logging.set_verbosity_info()
 logger = hf_logging.get_logger("transformers")
+hf_logging
 
 global GLOBAL_LOGGER
 GLOBAL_LOGGER = None
@@ -45,7 +46,11 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
         image_ls = example["image"]
         image_ls = image_ls if isinstance(image_ls, list) else [image_ls]
 
-        caption_ls_ls = example["caption_ls"]
+        if ("caption_ls" not in example) and "question_answer" not in example:
+            caption_ls_ls = [x["question"] for x in example["question_answer"]]
+        else:
+            caption_ls_ls = example["caption_ls"]
+
         caption_ls_ls = caption_ls_ls if isinstance(caption_ls_ls, list) else [caption_ls_ls]
 
         data = {
@@ -61,8 +66,6 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
 
                 data["input_ids"].append(outputs["input_ids"])
                 data["pixel_values"].append(outputs["pixel_values"])
-                # 길이 확인할 것
-                breakpoint()
                 data["lengths"].append(len(outputs["input_ids"]) + len(outputs["pixel_values"]))
 
         return data
@@ -147,14 +150,13 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
             encoder_hidden_size=train_args.abstractor_encoder_hidden_size,
         )
         config = MplugOwlConfig(
+            img_token_ids=tokenizer.encode("<|image|>")[-1],
             vision_config=vision_config.to_dict(),
             language_config=language_config.to_dict(),
             abstractor_config=abstractor_config.to_dict(),
-            img_token_ids=train_args.img_token_ids,
             num_query_tokens=train_args.num_query_tokens,
-            num_query_seq=train_args.num_query_seq,
-            ignore_ids=train_args.ignore_ids,
             vision_projection_bias=train_args.vision_projection_bias,
+            ignore_ids=-100,
         )
 
         model = MplugOwlForCausalLM(config=config)
