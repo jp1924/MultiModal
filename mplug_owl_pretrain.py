@@ -1,9 +1,12 @@
+import gc
 import os
 import random
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import pyarrow as pa
 import torch
-from datasets import Dataset, concatenate_datasets, load_dataset
+from data import DataCollatorForMplugOwl
+from datasets import Array3D, Dataset, Features, Image, Value, concatenate_datasets, load_dataset
 from models import MplugOwlAbstractorConfig, MplugOwlConfig, MplugOwlForCausalLM, MplugOwlProcessor
 from setproctitle import setproctitle
 from utils import SAFE_WEIGHTS_NAME, MplugOwlPretrainingArguments
@@ -15,7 +18,9 @@ from transformers import (
     AutoModel,
     AutoModelForCausalLM,
     AutoTokenizer,
+    CLIPConfig,
     CLIPModel,
+    CLIPProcessor,
     CLIPVisionModel,
     HfArgumentParser,
     Trainer,
@@ -28,45 +33,69 @@ from transformers import logging as hf_logging
 
 hf_logging.set_verbosity_info()
 logger = hf_logging.get_logger("transformers")
-hf_logging
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 
 global GLOBAL_LOGGER
 GLOBAL_LOGGER = None
 
 PROMPT = """### User:
 {img_token}
-{caption}
 
 ### Assistant:
-"""
+{caption}"""
 
 
 def main(train_args: MplugOwlPretrainingArguments) -> None:
     def preprocessor(example: Dict[str, Union[List[Any], List[List[Any]]]]) -> Dict[str, List[Any]]:
-        image_ls = example["image"]
+        def get_safe_img_idx() -> List[int]:
+            exclude_idx_ls = list()
+            include_idx_ls = range(len(example["id"]))
+            for idx in include_idx_ls:
+                try:
+                    example["image"][idx]
+                except:
+                    exclude_idx_ls.appedn(idx)
+            final_idx_ls = list(set(include_idx_ls) - set(exclude_idx_ls))
+            return final_idx_ls
+
+        final_idx_ls = get_safe_img_idx()
+        image_ls = [example["image"][idx] for idx in final_idx_ls]
         image_ls = image_ls if isinstance(image_ls, list) else [image_ls]
 
-        if ("caption_ls" not in example) and "question_answer" not in example:
-            caption_ls_ls = [x["question"] for x in example["question_answer"]]
+        if ("caption_ls" not in example) and ("question_answer" in example):
+            question_answer_ls = [example["question_answer"][idx] for idx in final_idx_ls]
+            caption_ls_ls = [[y["question"] for y in x] for x in question_answer_ls]
         else:
-            caption_ls_ls = example["caption_ls"]
-
+            caption_ls_ls = [example["caption_ls"][idx] for idx in final_idx_ls]
         caption_ls_ls = caption_ls_ls if isinstance(caption_ls_ls, list) else [caption_ls_ls]
 
+        query_eos_token_length = 1
+        query_length = model.config.num_query_tokens + query_eos_token_length
         data = {
-            "input_ids": [],
             "pixel_values": [],
-            "lengths": [],
+            "input_ids": [],
+            train_args.length_column_name: [],
         }
         for image, caption_ls in zip(image_ls, caption_ls_ls):
+            img_outputs = processor(images=image, return_tensors="np")
+            img_outputs["pixel_values"] = img_outputs["pixel_values"][0]
             for caption in random.choices(caption_ls, k=3):
-                # NOTE: pt로 하면 무한로딩 걸림.
                 prompt = PROMPT.format(img_token="<|image|>", caption=caption)
-                outputs = processor(text=prompt, images=image, return_tensors="np", return_attention_mask=False)
+                prompt = prompt.strip()
+                prompt = f"{prompt}{processor.tokenizer.eos_token}"
 
-                data["input_ids"].append(outputs["input_ids"])
-                data["pixel_values"].append(outputs["pixel_values"])
-                data["lengths"].append(len(outputs["input_ids"]) + len(outputs["pixel_values"]))
+                txt_outputs = processor(text=prompt, return_tensors="np")
+                txt_outputs["input_ids"] = txt_outputs["input_ids"][0].tolist()
+
+                input_ids_lenght = len(txt_outputs["input_ids"]) + query_length
+                data[train_args.length_column_name].append(input_ids_lenght)
+                data["pixel_values"].append(img_outputs["pixel_values"])
+                data["input_ids"].append(txt_outputs["input_ids"])
+
+        pool = pa.default_memory_pool()
+        pool.release_unused()
+        gc.collect()
 
         return data
 
@@ -112,11 +141,17 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
         GLOBAL_LOGGER.run._label(code="transformers_trainer")
 
     def get_mplug_owl(train_args: MplugOwlPretrainingArguments) -> Tuple[MplugOwlForCausalLM, MplugOwlProcessor]:
-        if train_args.vision_model_name_or_path and train_args.language_model_name_or_path:
+        if not (train_args.vision_model_name_or_path and train_args.language_model_name_or_path):
             raise ValueError
 
         image_processor = AutoImageProcessor.from_pretrained(train_args.vision_model_name_or_path)
-        tokenizer = AutoTokenizer.from_pretrained(train_args.language_model_name_or_path)
+        # synatra는 앞에 ['<|image|>', '▁'] 같이 들어감. 확인 필요, 보니깐 다른 special token들도 그러네.
+        tokenizer = AutoTokenizer.from_pretrained(
+            train_args.language_model_name_or_path,
+            use_fast=False,
+            padding_side="left",
+        )
+        tokenizer.pad_token_id = tokenizer.eos_token_id
         tokenizer.add_tokens(AddedToken("<|image|>", special=True, normalized=False), special_tokens=True)
 
         new_vocab_size = len(tokenizer.get_vocab())
@@ -133,10 +168,20 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
         )
         vision_config = AutoConfig.from_pretrained(train_args.vision_model_name_or_path)
 
+        if isinstance(vision_config, CLIPConfig):
+            vision_config = vision_config.vision_config
+
+        if isinstance(image_processor, CLIPProcessor):
+            image_processor = image_processor.image_processor
+
+            if "shortest_edge" in image_processor.size:
+                image_processor.size = image_processor.size["shortest_edge"]
+
         vision_model = AutoModel.from_pretrained(train_args.vision_model_name_or_path, config=vision_config)
-        language_model = AutoModelForCausalLM.from_pretrained(
-            train_args.language_model_name_or_path, config=language_config
-        )
+        language_model = AutoModelForCausalLM.from_pretrained(train_args.language_model_name_or_path)
+
+        embedding = language_model.resize_token_embeddings(new_vocab_size)
+        language_model.set_input_embeddings(embedding)
 
         if isinstance(vision_model, CLIPModel):
             vision_model = CLIPVisionModel.from_pretrained(train_args.vision_model_name_or_path, config=vision_config)
@@ -150,24 +195,27 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
             encoder_hidden_size=train_args.abstractor_encoder_hidden_size,
         )
         config = MplugOwlConfig(
-            img_token_ids=tokenizer.encode("<|image|>")[-1],
+            img_token_id=tokenizer.convert_tokens_to_ids("<|image|>"),
             vision_config=vision_config.to_dict(),
             language_config=language_config.to_dict(),
             abstractor_config=abstractor_config.to_dict(),
             num_query_tokens=train_args.num_query_tokens,
             vision_projection_bias=train_args.vision_projection_bias,
-            ignore_ids=-100,
+            ignore_id=-100,
         )
 
         model = MplugOwlForCausalLM(config=config)
         model.set_language_model(language_model)
         model.set_vision_model(vision_model)
 
+        for param in model.language_model.parameters():
+            param.requires_grad = False
+
         processor = MplugOwlProcessor(image_processor, tokenizer)
 
         return (model, processor)
 
-    model_name_or_path = train_args.resume_from_checkpoint or train_args.model_name_or_path
+    model_name_or_path = train_args.resume_from_checkpoint or train_args.model_name_or_path or ""
 
     # load model, feature_extractor, tokenizer
     if os.path.exists(os.path.join(model_name_or_path, SAFE_WEIGHTS_NAME)):
@@ -202,6 +250,13 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
                 name = dataset_name.split("/")[-1]
                 cache_file_name = {x: get_cache_path(x) for x in dataset}
 
+            features = Features(
+                {
+                    "pixel_values": Array3D(dtype="float32", shape=(3, 224, 224)),
+                    "input_ids": [Value("int32")],
+                    train_args.length_column_name: Value("int32"),
+                }
+            )
             dataset = dataset.map(
                 preprocessor,
                 num_proc=train_args.preprocessing_num_workers,
@@ -210,6 +265,7 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
                 cache_file_names=cache_file_name,
                 batch_size=train_args.preprocessing_batch_size,
                 remove_columns=column_names,
+                features=features,
                 desc=f"preprocess-{dataset_name}",
             )
 
@@ -223,6 +279,8 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
             specific_dataset = specific_dataset.add_column("dataset_name", added_data)
 
             data_dict[data_key].append(specific_dataset)
+
+    exit()
 
     train_dataset = None
     if train_args.do_train:
@@ -245,13 +303,27 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
             logger.info("test_dataset")
             logger.info(test_dataset)
 
+    if train_args.torch_compile:
+        model = torch.compile(
+            model,
+            backend=train_args.torch_compile_backend,
+            mode=train_args.torch_compile_mode,
+            fullgraph=True,
+        )
+
+    response_token_ids = processor.tokenizer.encode("\n\n### Assistant:\n")[5:]
+    collator = DataCollatorForMplugOwl(
+        processor=processor,
+        img_token_ids=model.config.img_token_id,
+        response_token_ids=response_token_ids,
+    )
     trainer = Trainer(
         model=model,
         args=train_args,
         tokenizer=processor,
         data_collator=collator,
         train_dataset=train_dataset,
-        eval_dataset=valid_dataset_dict,
+        # eval_dataset=valid_dataset_dict,
     )
     if train_args.do_train and train_dataset:
         train(trainer)
