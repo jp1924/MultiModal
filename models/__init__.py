@@ -5,3 +5,10 @@ from .mplug_owl import (
     MplugOwlForCausalLM,
     MplugOwlProcessor,
 )
+from .ureader import (
+    UReaderAbstractorConfig,
+    UReaderAbstractorModel,
+    UReaderConfig,
+    UreaderForCausalLM,
+    UReaderProcessor,
+)
