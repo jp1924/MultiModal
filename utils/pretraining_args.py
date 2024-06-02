@@ -104,6 +104,3 @@ class MplugOwlPretrainingArguments(TrainingArguments):
         default=None,
         metadata={"help": ""},
     )
-
-
-MplugOwlPretrainingArguments()
