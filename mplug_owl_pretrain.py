@@ -1,4 +1,5 @@
 import gc
+import importlib
 import os
 import random
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -6,8 +7,14 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import pyarrow as pa
 import torch
 from data import DataCollatorForMplugOwl
-from datasets import Array3D, Dataset, Features, Image, Value, concatenate_datasets, load_dataset
-from models import MplugOwlAbstractorConfig, MplugOwlConfig, MplugOwlForCausalLM, MplugOwlProcessor
+from datasets import Array3D, Dataset, Features, Value, concatenate_datasets, load_dataset
+from models import (
+    MplugOwlAbstractorConfig,
+    MplugOwlAbstractorModel,
+    MplugOwlConfig,
+    MplugOwlForCausalLM,
+    MplugOwlProcessor,
+)
 from setproctitle import setproctitle
 from utils import SAFE_WEIGHTS_NAME, MplugOwlPretrainingArguments
 
@@ -31,6 +38,14 @@ from transformers import (
 from transformers import logging as hf_logging
 
 
+module = importlib.import_module("transformers")
+setattr(module, "MplugOwlConfig", MplugOwlConfig)
+setattr(module, "MplugOwlProcessor", MplugOwlProcessor)
+setattr(module, "MplugOwlForCausalLM", MplugOwlForCausalLM)
+setattr(module, "MplugOwlAbstractorModel", MplugOwlAbstractorModel)
+setattr(module, "MplugOwlAbstractorConfig", MplugOwlAbstractorConfig)
+
+
 hf_logging.set_verbosity_info()
 logger = hf_logging.get_logger("transformers")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -48,26 +63,22 @@ PROMPT = """### User:
 
 def main(train_args: MplugOwlPretrainingArguments) -> None:
     def preprocessor(example: Dict[str, Union[List[Any], List[List[Any]]]]) -> Dict[str, List[Any]]:
-        def get_safe_img_idx() -> List[int]:
-            exclude_idx_ls = list()
-            include_idx_ls = range(len(example["id"]))
-            for idx in include_idx_ls:
-                try:
-                    example["image"][idx]
-                except:
-                    exclude_idx_ls.appedn(idx)
-            final_idx_ls = list(set(include_idx_ls) - set(exclude_idx_ls))
-            return final_idx_ls
+        try:
+            image_ls = example["image"]
+        except:
+            print("error 발생! batch 스킵!")
+            return {
+                "pixel_values": [],
+                "input_ids": [],
+                train_args.length_column_name: [],
+            }
 
-        final_idx_ls = get_safe_img_idx()
-        image_ls = [example["image"][idx] for idx in final_idx_ls]
         image_ls = image_ls if isinstance(image_ls, list) else [image_ls]
 
         if ("caption_ls" not in example) and ("question_answer" in example):
-            question_answer_ls = [example["question_answer"][idx] for idx in final_idx_ls]
-            caption_ls_ls = [[y["question"] for y in x] for x in question_answer_ls]
+            caption_ls_ls = [[y["question"] for y in x] for x in example["question_answer"]]
         else:
-            caption_ls_ls = [example["caption_ls"][idx] for idx in final_idx_ls]
+            caption_ls_ls = example["caption_ls"]
         caption_ls_ls = caption_ls_ls if isinstance(caption_ls_ls, list) else [caption_ls_ls]
 
         query_eos_token_length = 1
@@ -224,6 +235,11 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
     else:
         model, processor = get_mplug_owl(train_args)
 
+        init_save_path = os.path.join(train_args.output_dir, "init_modal")
+        if os.path.exists(init_save_path):
+            model.save_pretrained(init_save_path)
+            processor.save_pretrained(init_save_path)
+
     # NOTE: Trainer에서 자동으로 해줌, 하지만 확인을 위해 이렇게 선언 함.
     if train_args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
@@ -279,8 +295,6 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
             specific_dataset = specific_dataset.add_column("dataset_name", added_data)
 
             data_dict[data_key].append(specific_dataset)
-
-    exit()
 
     train_dataset = None
     if train_args.do_train:
