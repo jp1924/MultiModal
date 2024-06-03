@@ -36,61 +36,56 @@ IMG_TOKEN = "<|image|>"
 @dataclass
 class ConvertArguments:
     output_dir: str = field(
-        default=None,
+        default="/root/mplug_owl_init_model",
         metadata={"help": ""},
     )
 
     vision_model_name_or_path: str = field(
-        default=None,
+        default="Bingsu/clip-vit-large-patch14-ko",
         metadata={"help": ""},
     )
     language_model_name_or_path: str = field(
-        default=None,
+        default="maywell/Synatra-7B-v0.3-dpo",
         metadata={"help": ""},
     )
     ignore_ids: int = field(
-        default=None,
+        default=-100,
         metadata={"help": ""},
     )
     num_query_tokens: int = field(
-        default=None,
+        default=32,
         metadata={"help": ""},
     )
     vision_projection_bias: bool = field(
-        default=None,
-        metadata={"help": ""},
-    )
-
-    abstractor_hidden_size: int = field(
-        default=None,
+        default=False,
         metadata={"help": ""},
     )
     abstractor_num_hidden_layers: int = field(
-        default=None,
+        default=6,
         metadata={"help": ""},
     )
     abstractor_num_attention_heads: int = field(
-        default=None,
+        default=16,
         metadata={"help": ""},
     )
     abstractor_intermediate_size: int = field(
-        default=None,
+        default=2048,
         metadata={"help": ""},
     )
     abstractor_attention_probs_dropout_prob: float = field(
-        default=None,
+        default=0.01,
         metadata={"help": ""},
     )
     abstractor_layer_norm_eps: float = field(
-        default=None,
+        default=1e-6,
         metadata={"help": ""},
     )
     abstractor_encoder_hidden_size: int = field(
-        default=None,
+        default=1024,
         metadata={"help": ""},
     )
     attn_implementation: str = field(
-        default=None,
+        default="flash_attn",
         metadata={"help": ""},
     )
 

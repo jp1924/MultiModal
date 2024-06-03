@@ -2,7 +2,7 @@ import gc
 import importlib
 import os
 import random
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 import pyarrow as pa
 import torch
@@ -16,19 +16,9 @@ from models import (
     MplugOwlProcessor,
 )
 from setproctitle import setproctitle
-from utils import SAFE_WEIGHTS_NAME, MplugOwlPretrainingArguments
+from utils import MplugOwlPretrainingArguments
 
 from transformers import (
-    AddedToken,
-    AutoConfig,
-    AutoImageProcessor,
-    AutoModel,
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    CLIPConfig,
-    CLIPModel,
-    CLIPProcessor,
-    CLIPVisionModel,
     HfArgumentParser,
     Trainer,
     is_torch_xla_available,
@@ -151,94 +141,12 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
             GLOBAL_LOGGER.watch(model, log=_watch_model, log_freq=max(100, train_args.logging_steps))
         GLOBAL_LOGGER.run._label(code="transformers_trainer")
 
-    def get_mplug_owl(train_args: MplugOwlPretrainingArguments) -> Tuple[MplugOwlForCausalLM, MplugOwlProcessor]:
-        if not (train_args.vision_model_name_or_path and train_args.language_model_name_or_path):
-            raise ValueError
-
-        image_processor = AutoImageProcessor.from_pretrained(train_args.vision_model_name_or_path)
-        # synatra는 앞에 ['<|image|>', '▁'] 같이 들어감. 확인 필요, 보니깐 다른 special token들도 그러네.
-        tokenizer = AutoTokenizer.from_pretrained(
-            train_args.language_model_name_or_path,
-            use_fast=False,
-            padding_side="left",
-        )
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-        tokenizer.add_tokens(AddedToken("<|image|>", special=True, normalized=False), special_tokens=True)
-
-        new_vocab_size = len(tokenizer.get_vocab())
-
-        language_config = AutoConfig.from_pretrained(
-            train_args.language_model_name_or_path,
-            vocab_size=new_vocab_size,
-            padding_idx=tokenizer.pad_token_id,
-            pad_token_id=tokenizer.pad_token_id,
-            bos_token_id=tokenizer.bos_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-            unk_token_id=tokenizer.unk_token_id,
-            attn_implementation=train_args.attn_implementation,
-        )
-        vision_config = AutoConfig.from_pretrained(train_args.vision_model_name_or_path)
-
-        if isinstance(vision_config, CLIPConfig):
-            vision_config = vision_config.vision_config
-
-        if isinstance(image_processor, CLIPProcessor):
-            image_processor = image_processor.image_processor
-
-            if "shortest_edge" in image_processor.size:
-                image_processor.size = image_processor.size["shortest_edge"]
-
-        vision_model = AutoModel.from_pretrained(train_args.vision_model_name_or_path, config=vision_config)
-        language_model = AutoModelForCausalLM.from_pretrained(train_args.language_model_name_or_path)
-
-        embedding = language_model.resize_token_embeddings(new_vocab_size)
-        language_model.set_input_embeddings(embedding)
-
-        if isinstance(vision_model, CLIPModel):
-            vision_model = CLIPVisionModel.from_pretrained(train_args.vision_model_name_or_path, config=vision_config)
-
-        abstractor_config = MplugOwlAbstractorConfig(
-            num_hidden_layers=train_args.abstractor_num_hidden_layers,
-            num_attention_heads=train_args.abstractor_num_attention_heads,
-            intermediate_size=train_args.abstractor_intermediate_size,
-            attention_probs_dropout_prob=train_args.abstractor_attention_probs_dropout_prob,
-            layer_norm_eps=train_args.abstractor_layer_norm_eps,
-            encoder_hidden_size=train_args.abstractor_encoder_hidden_size,
-        )
-        config = MplugOwlConfig(
-            img_token_id=tokenizer.convert_tokens_to_ids("<|image|>"),
-            vision_config=vision_config.to_dict(),
-            language_config=language_config.to_dict(),
-            abstractor_config=abstractor_config.to_dict(),
-            num_query_tokens=train_args.num_query_tokens,
-            vision_projection_bias=train_args.vision_projection_bias,
-            ignore_id=-100,
-        )
-
-        model = MplugOwlForCausalLM(config=config)
-        model.set_language_model(language_model)
-        model.set_vision_model(vision_model)
-
-        for param in model.language_model.parameters():
-            param.requires_grad = False
-
-        processor = MplugOwlProcessor(image_processor, tokenizer)
-
-        return (model, processor)
-
     model_name_or_path = train_args.resume_from_checkpoint or train_args.model_name_or_path or ""
 
-    # load model, feature_extractor, tokenizer
-    if os.path.exists(os.path.join(model_name_or_path, SAFE_WEIGHTS_NAME)):
-        model = MplugOwlForCausalLM.from_pretrained(model_name_or_path)
-        processor = MplugOwlProcessor.from_pretrained(model_name_or_path)
-    else:
-        model, processor = get_mplug_owl(train_args)
+    model = MplugOwlForCausalLM.from_pretrained(model_name_or_path)
+    model.freeze_language_model()
 
-        init_save_path = os.path.join(train_args.output_dir, "init_modal")
-        if os.path.exists(init_save_path):
-            model.save_pretrained(init_save_path)
-            processor.save_pretrained(init_save_path)
+    processor = MplugOwlProcessor.from_pretrained(model_name_or_path)
 
     # NOTE: Trainer에서 자동으로 해줌, 하지만 확인을 위해 이렇게 선언 함.
     if train_args.gradient_checkpointing:
@@ -306,6 +214,27 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
     valid_dataset = None
     if train_args.do_eval:
         valid_dataset = collect_dataset(train_args.valid_dataset_prefix)
+
+        valid_dataset_dict = dict()
+        valid_name_ls = valid_dataset["dataset_name"]
+        for dataset_name in set(valid_name_ls):
+            part_idx = [idx for idx, x in enumerate(valid_name_ls) if x == dataset_name]
+            part_dataset = valid_dataset.select(part_idx, keep_in_memory=False)
+
+            # 'jp1924/KconfSpeech-validation'
+            start = dataset_name.rindex("/") + 1
+            end = dataset_name.rindex("-")
+
+            if dataset_name[start:end] in train_args.valid_exclude_ls:
+                continue
+
+            if len(part_dataset) > train_args.valid_truncate_num:
+                part_dataset = part_dataset.shuffle(train_args.seed)
+                part_dataset = part_dataset.select(range(train_args.valid_truncate_num))
+
+            valid_dataset_dict[dataset_name[start:end]] = part_dataset
+        valid_dataset = valid_dataset_dict
+
         if (train_args.local_rank == 0) and valid_dataset:
             logger.info("valid_dataset")
             logger.info(valid_dataset)
@@ -337,7 +266,7 @@ def main(train_args: MplugOwlPretrainingArguments) -> None:
         tokenizer=processor,
         data_collator=collator,
         train_dataset=train_dataset,
-        # eval_dataset=valid_dataset_dict,
+        eval_dataset=valid_dataset,
     )
     if train_args.do_train and train_dataset:
         train(trainer)
@@ -355,7 +284,6 @@ def train(trainer: Trainer) -> None:
 
     save_dir = os.path.join(train_args.output_dir, "last_model")
     trainer.save_model(save_dir)
-    # trainer 특성 때문에 save_metrics 안됨.
 
 
 @torch.no_grad()
