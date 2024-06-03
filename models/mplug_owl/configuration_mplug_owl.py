@@ -33,6 +33,9 @@ class MplugOwlAbstractorConfig(PretrainedConfig):
         self.layer_norm_eps = layer_norm_eps
         self.encoder_hidden_size = encoder_hidden_size
 
+        self.initializer_factor = 1.0
+        self.initializer_range = 0.02
+
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path: Union[str, os.PathLike], **kwargs) -> "PretrainedConfig":
         config_dict, kwargs = cls.get_config_dict(pretrained_model_name_or_path, **kwargs)
@@ -56,10 +59,9 @@ class MplugOwlConfig(PretrainedConfig):
 
     def __init__(
         self,
-        img_token_ids: int,
+        img_token_id: int,
         num_query_tokens: int = 64,
-        num_query_seq: int = 20,
-        ignore_ids: int = -100,
+        ignore_id: int = -100,
         vision_projection_bias: bool = False,
         **kwargs,
     ):
@@ -81,24 +83,23 @@ class MplugOwlConfig(PretrainedConfig):
         vision_config_class = CONFIG_MAPPING[vision_model_type]
         language_config_class = CONFIG_MAPPING[language_model_type]
 
-        self.language_config["attn_implementation"] = self.attn_implementation
         self.vision_config = vision_config_class(**vision_config)
         self.language_config = language_config_class(**language_config)
-        self.abstractor_config = MplugOwlAbstractorConfig(
-            pad_token_id=self.pad_token_id,
-            encoder_hidden_size=self.vision_config.hidden_size,
-            **abstractor_config,
-        )
+
+        abstractor_config["encoder_hidden_size"] = self.vision_config.hidden_size
+        abstractor_config["pad_token_id"] = self.pad_token_id
+
+        self.abstractor_config = MplugOwlAbstractorConfig(**abstractor_config)
 
         self.num_query_tokens = num_query_tokens
 
         self.initializer_factor = 1.0
         self.initializer_range = 0.02
 
-        self.img_token_ids = img_token_ids
-        self.ignore_ids = ignore_ids
+        self.pad_token_id = self.language_config.pad_token_id
+        self.img_token_id = img_token_id
+        self.ignore_id = ignore_id
         self.vision_projection_bias = vision_projection_bias
-        self.num_query_seq = num_query_seq
 
     @classmethod
     def from_vision_text_configs(

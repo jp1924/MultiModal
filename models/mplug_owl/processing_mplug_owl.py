@@ -114,6 +114,26 @@ class MplugOwlProcessor(ProcessorMixin):
         else:
             return BatchEncoding(data=dict(**image_features), tensor_type=return_tensors)
 
+    def pad(self, *args, **kwargs):
+        pixel_values = kwargs.pop("pixel_values", None)
+        labels = kwargs.pop("labels", None)
+        if len(args) > 0:
+            pixel_values = args[0]
+            args = args[1:]
+
+        if pixel_values is not None:
+            pixel_values = self.image_processor.pad(pixel_values, *args, **kwargs)
+        if labels is not None:
+            labels = self.tokenizer.pad(labels, **kwargs)
+
+        if labels is None:
+            return pixel_values
+        elif pixel_values is None:
+            return labels
+        else:
+            pixel_values["labels"] = labels["input_ids"]
+            return pixel_values
+
     def batch_decode(self, *args, **kwargs):
         """
         This method forwards all its arguments to MplugOwlTokenizer's

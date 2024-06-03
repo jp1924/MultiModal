@@ -19,7 +19,12 @@ from transformers.modeling_outputs import (
 )
 from transformers.modeling_utils import PreTrainedModel
 
-from .configuration_mplug_owl import MplugOwlAbstractorConfig, MplugOwlConfig
+
+try:
+    # NOTE: debugging할 때 import 애러 발생해서 이렇게 집어놓음.
+    from .configuration_mplug_owl import MplugOwlAbstractorConfig, MplugOwlConfig
+except ImportError:
+    from configuration_mplug_owl import MplugOwlAbstractorConfig, MplugOwlConfig
 
 
 @dataclass
@@ -394,7 +399,7 @@ class MplugOwPreTrainedModel(PreTrainedModel):
         std = (
             self.config.initializer_range
             if hasattr(self.config, "initializer_range")
-            else self.config.text_config.initializer_range
+            else self.config.initializer_range
         )
 
         if hasattr(module, "class_embedding"):
@@ -430,7 +435,7 @@ class MplugOwPreTrainedModel(PreTrainedModel):
 
 
 class MplugOwlAbstractorModel(MplugOwPreTrainedModel):
-    def __init__(self, config: MplugOwlConfig) -> None:
+    def __init__(self, config: MplugOwlAbstractorConfig) -> None:
         super().__init__(config)
         self.config = config
 
@@ -637,6 +642,15 @@ class MplugOwlForCausalLM(MplugOwPreTrainedModel):
     def set_output_embeddings(self, new_embeddings: nn.Module) -> None:
         self.language_model.set_output_embeddings(new_embeddings)
 
+    def set_language_model(self, language_model: nn.Module) -> None:
+        self.language_model = language_model
+
+    def set_vision_model(self, vision_model: nn.Module) -> None:
+        self.vision_model = vision_model
+
+    def set_abstractor_model(self, abstractor: nn.Module) -> None:
+        self.abstractor = abstractor
+
     def set_decoder(self, decoder: nn.Module) -> None:
         self.language_model.set_decoder(decoder)
 
@@ -663,11 +677,11 @@ class MplugOwlForCausalLM(MplugOwPreTrainedModel):
         batch_size, sequence_length = input_ids.shape
         left_padding = not torch.sum(input_ids[:, -1] == torch.tensor(self.config.pad_token_id))
         # 1. Create a mask to know where special image tokens are
-        special_image_token_mask = input_ids == self.config.img_token_ids
+        special_image_token_mask = input_ids == self.config.img_token_id
         num_special_image_tokens = torch.sum(special_image_token_mask, dim=-1)
         # Compute the maximum embed dimension
         max_embed_dim = (num_special_image_tokens.max() * (num_image_patches - 1)) + sequence_length
-        batch_indices, non_image_indices = torch.where(input_ids != self.config.img_token_ids)
+        batch_indices, non_image_indices = torch.where(input_ids != self.config.img_token_id)
 
         # 2. Compute the positions where text should be written
         # Calculate new positions for text tokens in merged image-text sequence.
@@ -689,7 +703,7 @@ class MplugOwlForCausalLM(MplugOwPreTrainedModel):
         )
         if labels is not None:
             final_labels = torch.full(
-                (batch_size, max_embed_dim), self.config.ignore_ids, dtype=input_ids.dtype, device=input_ids.device
+                (batch_size, max_embed_dim), self.config.ignore_id, dtype=input_ids.dtype, device=input_ids.device
             )
         # In case the Vision model or the Language model has been offloaded to CPU, we need to manually
         # set the corresponding tensors into their correct target device.
@@ -759,7 +773,7 @@ class MplugOwlForCausalLM(MplugOwPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.language_config.use_return_dict
 
         # input_ids와 pixel_values가 정상적으로 들어 왔는지 확인하는 구문.
-        if self.config.img_token_ids in input_ids and pixel_values is None:
+        if self.config.img_token_id in input_ids and pixel_values is None:
             raise ValueError("input_ids에 img_token가 포함되어 있으면 pixel_values도 같이 입력되어 있어야 한다.")
 
         if inputs_embeds is None:
@@ -767,7 +781,7 @@ class MplugOwlForCausalLM(MplugOwPreTrainedModel):
 
             if pixel_values is not None and input_ids.shape[1] != 1:
                 num_pixel_values = pixel_values.shape[0]
-                num_img_token = (self.config.img_token_ids == input_ids).sum()
+                num_img_token = (self.config.img_token_id == input_ids).sum()
                 if num_img_token != num_pixel_values:
                     raise ValueError(
                         "input_ids에 삽입된 img_token의 개수와 입력된 pixel_values의 개수와 차이가 있습니다!"
@@ -780,12 +794,12 @@ class MplugOwlForCausalLM(MplugOwPreTrainedModel):
                 vision_attention_mask = vision_attention_mask.to(torch.long)
 
                 query_tokens = self.query_tokens.expand(vision_embeds.shape[0], -1, -1)
-                attention_mask = torch.ones(query_tokens.shape[:-1], device=query_tokens.device)
-                attention_mask = attention_mask.to(torch.long)
+                query_attention_mask = torch.ones(query_tokens.shape[:-1], device=query_tokens.device)
+                query_attention_mask = query_attention_mask.to(torch.long)
 
                 abstractor_outputs = self.abstractor(
                     query_embeds=query_tokens,
-                    attention_mask=attention_mask,
+                    attention_mask=query_attention_mask,
                     encoder_hidden_states=vision_embeds,
                     encoder_attention_mask=vision_attention_mask,
                 )
@@ -871,7 +885,7 @@ class MplugOwlForCausalLM(MplugOwPreTrainedModel):
             elif past_length < input_ids.shape[1]:
                 input_ids = input_ids[:, past_length:]
             # 3 - Otherwise (past_length >= input_ids.shape[1]), let's assume input_ids only has unprocessed tokens.
-            elif self.config.img_token_ids in input_ids:
+            elif self.config.img_token_id in input_ids:
                 input_ids = input_ids[:, input_ids.shape[1] - 1 :]
             # If the cache has seen more tokens than it can hold, then the cache has a size limit. Let's discard the
             # older attention values, as their corresponding values are not part of the input.
