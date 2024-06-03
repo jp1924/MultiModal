@@ -11,7 +11,7 @@ export CUDA_VISIBLE_DEVICES="7"
 
 export OMP_NUM_THREADS=2
 
-deepspeed --include=localhost:0,1,2,3,4,5,6,7 --master_port=61000 \
+python3 \
     /root/workspace/mplug_owl_pretrain.py \
     --output_dir=/root/output_dir/mplug_owl \
     --run_name=test \
@@ -50,5 +50,5 @@ deepspeed --include=localhost:0,1,2,3,4,5,6,7 --master_port=61000 \
     --train_dataset_prefix=train \
     --valid_dataset_prefix=validation \
     --test_dataset_prefix=test \
-    --group_by_length=true \
-    --deepspeed=/root/workspace/ds_config/ZeRO_2.json
+    --attn_implementation=flash_attn \
+    --group_by_length=true
