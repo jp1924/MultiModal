@@ -23,6 +23,9 @@ class UReaderAbstractorConfig(PretrainedConfig):
         initializer_range=0.02,
         layer_norm_eps=1e-6,
         encoder_hidden_size=1024,
+        shape_croping_position_type="post",
+        cut_num: int = 15,
+        embedding_scale: float = 0.5,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -34,6 +37,9 @@ class UReaderAbstractorConfig(PretrainedConfig):
         self.initializer_range = initializer_range
         self.layer_norm_eps = layer_norm_eps
         self.encoder_hidden_size = encoder_hidden_size
+        self.shape_croping_position_type = shape_croping_position_type
+        self.cut_num = cut_num
+        self.embedding_scale = embedding_scale
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path: Union[str, os.PathLike], **kwargs) -> "PretrainedConfig":
@@ -53,16 +59,15 @@ class UReaderAbstractorConfig(PretrainedConfig):
 
 
 class UReaderConfig(PretrainedConfig):
-    model_type = "mplug_owl"
+    model_type = "ureader"
     is_composition = True
 
     def __init__(
         self,
-        img_token_ids: int,
+        img_token_id: int,
         num_query_tokens: int = 64,
-        num_query_seq: int = 20,
-        ignore_ids: int = -100,
-        vision_projection_bias=False,
+        ignore_id: int = -100,
+        vision_projection_bias: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -85,21 +90,21 @@ class UReaderConfig(PretrainedConfig):
 
         self.vision_config = vision_config_class(**vision_config)
         self.language_config = language_config_class(**language_config)
-        self.abstractor_config = UReaderAbstractorConfig(
-            pad_token_id=self.pad_token_id,
-            encoder_hidden_size=self.vision_config.hidden_size,
-            **abstractor_config,
-        )
+
+        abstractor_config["encoder_hidden_size"] = self.vision_config.hidden_size
+        abstractor_config["pad_token_id"] = self.pad_token_id
+
+        self.abstractor_config = UReaderAbstractorConfig(**abstractor_config)
 
         self.num_query_tokens = num_query_tokens
 
         self.initializer_factor = 1.0
         self.initializer_range = 0.02
 
-        self.img_token_ids = img_token_ids
-        self.ignore_ids = ignore_ids
+        self.pad_token_id = self.language_config.pad_token_id
+        self.img_token_id = img_token_id
+        self.ignore_id = ignore_id
         self.vision_projection_bias = vision_projection_bias
-        self.num_query_seq = num_query_seq
 
     @classmethod
     def from_vision_text_configs(
