@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
-from configuration_ureader import UReaderAbstractorConfig, UReaderConfig
 
 from transformers import (
     AutoModel,
@@ -12,13 +11,14 @@ from transformers import (
     CLIPVisionConfig,
     CLIPVisionModel,
 )
-from transformers.cache_utils import Cache
 from transformers.modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
     BaseModelOutputWithPoolingAndCrossAttentions,
     ModelOutput,
 )
 from transformers.modeling_utils import PreTrainedModel
+
+from .configuration_ureader import UReaderAbstractorConfig, UReaderConfig
 
 
 @dataclass
@@ -68,9 +68,10 @@ class UReaderPatchEmbeddings(nn.Module):
     def __init__(self, config: UReaderAbstractorConfig, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
-        self.cut_num = 15  # TODO hard code되어 있음.
-        self.h_postion_patch_embedding = torch.nn.Embedding(self.cut_num, config.hidden_size)  # height
-        self.w_postion_patch_embedding = torch.nn.Embedding(self.cut_num, config.hidden_size)  # width
+        self.config = config
+
+        self.h_postion_patch_embedding = torch.nn.Embedding(config.cut_num, config.hidden_size)  # height
+        self.w_postion_patch_embedding = torch.nn.Embedding(config.cut_num, config.hidden_size)  # width
 
     def forward(
         self,
@@ -79,7 +80,7 @@ class UReaderPatchEmbeddings(nn.Module):
     ) -> torch.FloatTensor:
         h_embedding = self.h_postion_patch_embedding(patch_positions[:, 0])
         w_embedding = self.w_postion_patch_embedding(patch_positions[:, 1])
-        patch_embedding = (h_embedding + w_embedding) * 0.5
+        patch_embedding = (h_embedding + w_embedding) * self.config.embedding_scale
 
         patch_embedding = patch_embedding[:, None, :]  # [N, D] > [N, 1, D]
         patch_embedding = patch_embedding.expand(-1, hidden_states.shape[1], -1)  # [N, 1, D] > [N, S, D]
@@ -458,6 +459,8 @@ class UReaderAbstractorModel(UReaderPreTrainedModel):
         super().__init__(config)
         self.config = config
 
+        print(config)
+
         self.encoder = UReaderAbstractorEncoder(config)
         self.patch_postion_embedding = UReaderPatchEmbeddings(config)
 
@@ -598,6 +601,7 @@ class UreaderForCausalLM(UReaderPreTrainedModel):
         config: UReaderConfig,
         vision_model: Optional[PreTrainedModel] = None,
         language_model: Optional[PreTrainedModel] = None,
+        abstractor: Optional[PreTrainedModel] = None,
     ) -> None:
         super().__init__(config)
         self.config = config
@@ -609,12 +613,11 @@ class UreaderForCausalLM(UReaderPreTrainedModel):
                 vision_model = AutoModel.from_config(config.vision_config)
         if language_model is None:
             language_model = AutoModelForCausalLM.from_config(config.language_config)
+        if abstractor is None:
+            abstractor = UReaderAbstractorModel(config.abstractor_config)
 
-        # Copied from BLIP-2
         if language_model._tied_weights_keys is not None:
             self._tied_weights_keys.extend([f"language_model.{k}" for k in language_model._tied_weights_keys])
-
-        # 이건 내가 만든거, TODO: 근데 vision에 tied_weights가 필요함?
         if vision_model._tied_weights_keys is not None:
             self._tied_weights_keys.extend([f"vision_model.{k}" for k in vision_model._tied_weights_keys])
 
@@ -623,10 +626,7 @@ class UreaderForCausalLM(UReaderPreTrainedModel):
 
         self.vision_model = vision_model
         self.language_model = language_model
-
-        # Copied from BLIP-2
-        self.query_tokens = nn.Parameter(torch.zeros(1, config.num_query_tokens, config.abstractor_config.hidden_size))
-        self.abstractor = UReaderAbstractorModel(config.abstractor_config)
+        self.abstractor = abstractor
 
         self.vision_projection = nn.Linear(
             config.vision_config.hidden_size,
@@ -634,8 +634,244 @@ class UreaderForCausalLM(UReaderPreTrainedModel):
             bias=config.vision_projection_bias,
         )
 
+        self.query_tokens = nn.Parameter(torch.zeros(1, config.num_query_tokens, config.abstractor_config.hidden_size))
         self.vision_eos_token = nn.Parameter(torch.zeros(1, 1, config.language_config.hidden_size))
         nn.init.trunc_normal_(self.vision_eos_token, mean=0.0, std=self.config.initializer_range)
 
-        # 여기선 model weight를 불러오는게 아니라 단순 뼈대만 불러옴. weight도 같이 불러올러면 from_pretrained를 하거나 load_state_dict을 해야 함.
         self.post_init()
+
+    def freeze_language_model(self):
+        for param in self.language_model.parameters():
+            param.requires_grad = False
+        self.language_model._requires_grad = False
+
+    def freeze_abstractor_module(self):
+        self.abstractor._freeze_parameters()
+
+    def freeze_vision_model(self):
+        for param in self.vision_model.parameters():
+            param.requires_grad = False
+        self.vision_model._requires_grad = False
+
+    def get_input_embeddings(self) -> nn.Embedding:
+        return self.language_model.get_input_embeddings()
+
+    def set_input_embeddings(self, value) -> None:
+        self.language_model.set_input_embeddings(value)
+
+    def get_output_embeddings(self) -> nn.Module:
+        return self.language_model.get_output_embeddings()
+
+    def set_output_embeddings(self, new_embeddings: nn.Module) -> None:
+        self.language_model.set_output_embeddings(new_embeddings)
+
+    def set_language_model(self, language_model: nn.Module) -> None:
+        self.language_model = language_model
+
+    def set_vision_model(self, vision_model: nn.Module) -> None:
+        self.vision_model = vision_model
+
+    def set_decoder(self, decoder: nn.Module) -> None:
+        self.language_model.set_decoder(decoder)
+
+    def get_decoder(self) -> nn.Module:
+        return self.language_model.get_decoder()
+
+    def tie_weights(self):
+        return self.language_model.tie_weights()
+
+    def resize_token_embeddings(
+        self,
+        new_num_tokens: Optional[int] = None,
+        pad_to_multiple_of=None,
+    ) -> nn.Embedding:
+        model_embeds = self.language_model.resize_token_embeddings(new_num_tokens, pad_to_multiple_of)
+        # update vocab size
+        self.config.language_config.vocab_size = model_embeds.num_embeddings
+        self.vocab_size = model_embeds.num_embeddings
+        return model_embeds
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        pixel_values: Optional[torch.FloatTensor] = None,  # vision
+        vision_kwargs: Optional[Dict[str, Any]] = {},  # vision
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, UReaderCausalLMOutputWithPast]:
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+        use_cache = use_cache if use_cache is not None else self.config.language_config.use_cache
+        return_dict = return_dict if return_dict is not None else self.config.language_config.use_return_dict
+
+        # input_ids와 pixel_values가 정상적으로 들어 왔는지 확인하는 구문.
+        if self.config.img_token_id in input_ids and pixel_values is None:
+            raise ValueError("input_ids에 img_token가 포함되어 있으면 pixel_values도 같이 입력되어 있어야 한다.")
+
+        if inputs_embeds is None:
+            inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
+
+            if pixel_values is not None and input_ids.shape[1] != 1:
+                num_pixel_values = pixel_values.shape[0]
+                num_img_token = (self.config.img_token_id == input_ids).sum()
+                if num_img_token != num_pixel_values:
+                    raise ValueError(
+                        "input_ids에 삽입된 img_token의 개수와 입력된 pixel_values의 개수와 차이가 있습니다!"
+                    )
+
+                vision_outputs = self.vision_model(pixel_values=pixel_values, **vision_kwargs)
+                vision_embeds = vision_outputs[0]
+
+                vision_attention_mask = torch.ones(vision_embeds.shape[:-1], device=vision_embeds.device)
+                vision_attention_mask = vision_attention_mask.to(torch.long)
+
+                query_tokens = self.query_tokens.expand(vision_embeds.shape[0], -1, -1)
+                query_attention_mask = torch.ones(query_tokens.shape[:-1], device=query_tokens.device)
+                query_attention_mask = query_attention_mask.to(torch.long)
+
+                abstractor_outputs = self.abstractor(
+                    query_embeds=query_tokens,
+                    attention_mask=query_attention_mask,
+                    encoder_hidden_states=vision_embeds,
+                    encoder_attention_mask=vision_attention_mask,
+                )
+
+                query_tokens = abstractor_outputs[0]
+                query_tokens = self.vision_projection(query_tokens)
+                vision_eos_token = self.vision_eos_token.repeat(query_tokens.shape[0], 1, 1)
+
+                image_features = torch.cat([query_tokens, vision_eos_token], dim=1)
+            inputs_embeds, attention_mask, labels, position_ids = self._merge_input_ids_with_image_features(
+                image_features, inputs_embeds, input_ids, attention_mask, labels
+            )
+            input_ids = None
+
+        language_outputs = self.language_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        logits = language_outputs[0]
+
+        loss = None
+        if labels is not None:
+            # Shift so that tokens < n predict n
+            if attention_mask is not None:
+                shift_attention_mask = attention_mask[..., 1:]
+                shift_logits = logits[..., :-1, :][shift_attention_mask.to(logits.device) != 0].contiguous()
+                shift_labels = labels[..., 1:][shift_attention_mask.to(labels.device) != 0].contiguous()
+            else:
+                shift_logits = logits[..., :-1, :].contiguous()
+                shift_labels = labels[..., 1:].contiguous()
+            # Flatten the tokens
+            loss_fct = nn.CrossEntropyLoss()
+            loss = loss_fct(
+                shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1).to(shift_logits.device)
+            )
+
+        if not return_dict:
+            output = (logits,) + language_outputs[1:]
+            return (loss,) + output if loss is not None else output
+
+        return UReaderCausalLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            past_key_values=language_outputs.past_key_values,
+            hidden_states=language_outputs.hidden_states,
+            attentions=language_outputs.attentions,
+        )
+
+    # Copied from transformers.models.llava.modeling_llava.LlavaForConditionalGeneration._merge_input_ids_with_image_features with Llava->MplugOwl
+    def _merge_input_ids_with_image_features(self, image_features, inputs_embeds, input_ids, attention_mask, labels):
+        num_images, num_image_patches, embed_dim = image_features.shape
+        batch_size, sequence_length = input_ids.shape
+        left_padding = not torch.sum(input_ids[:, -1] == torch.tensor(self.config.pad_token_id))
+        # 1. Create a mask to know where special image tokens are
+        special_image_token_mask = input_ids == self.config.img_token_id
+        num_special_image_tokens = torch.sum(special_image_token_mask, dim=-1)
+        # Compute the maximum embed dimension
+        max_embed_dim = (num_special_image_tokens.max() * (num_image_patches - 1)) + sequence_length
+        batch_indices, non_image_indices = torch.where(input_ids != self.config.img_token_id)
+
+        # 2. Compute the positions where text should be written
+        # Calculate new positions for text tokens in merged image-text sequence.
+        # `special_image_token_mask` identifies image tokens. Each image token will be replaced by `nb_text_tokens_per_images - 1` text tokens.
+        # `torch.cumsum` computes how each image token shifts subsequent text token positions.
+        # - 1 to adjust for zero-based indexing, as `cumsum` inherently increases indices by one.
+        new_token_positions = torch.cumsum((special_image_token_mask * (num_image_patches - 1) + 1), -1) - 1
+        nb_image_pad = max_embed_dim - 1 - new_token_positions[:, -1]
+        if left_padding:
+            new_token_positions += nb_image_pad[:, None]  # offset for left padding
+        text_to_overwrite = new_token_positions[batch_indices, non_image_indices]
+
+        # 3. Create the full embedding, already padded to the maximum position
+        final_embedding = torch.zeros(
+            batch_size, max_embed_dim, embed_dim, dtype=inputs_embeds.dtype, device=inputs_embeds.device
+        )
+        final_attention_mask = torch.zeros(
+            batch_size, max_embed_dim, dtype=attention_mask.dtype, device=inputs_embeds.device
+        )
+        if labels is not None:
+            final_labels = torch.full(
+                (batch_size, max_embed_dim), self.config.ignore_id, dtype=input_ids.dtype, device=input_ids.device
+            )
+        # In case the Vision model or the Language model has been offloaded to CPU, we need to manually
+        # set the corresponding tensors into their correct target device.
+        target_device = inputs_embeds.device
+        batch_indices, non_image_indices, text_to_overwrite = (
+            batch_indices.to(target_device),
+            non_image_indices.to(target_device),
+            text_to_overwrite.to(target_device),
+        )
+        attention_mask = attention_mask.to(target_device)
+
+        # 4. Fill the embeddings based on the mask. If we have ["hey" "<image>", "how", "are"]
+        # we need to index copy on [0, 577, 578, 579] for the text and [1:576] for the image features
+        final_embedding[batch_indices, text_to_overwrite] = inputs_embeds[batch_indices, non_image_indices]
+        final_attention_mask[batch_indices, text_to_overwrite] = attention_mask[batch_indices, non_image_indices]
+        if labels is not None:
+            final_labels[batch_indices, text_to_overwrite] = labels[batch_indices, non_image_indices]
+
+        # 5. Fill the embeddings corresponding to the images. Anything that is not `text_positions` needs filling (#29835)
+        image_to_overwrite = torch.full(
+            (batch_size, max_embed_dim), True, dtype=torch.bool, device=inputs_embeds.device
+        )
+        image_to_overwrite[batch_indices, text_to_overwrite] = False
+        image_to_overwrite &= image_to_overwrite.cumsum(-1) - 1 >= nb_image_pad[:, None].to(target_device)
+
+        if image_to_overwrite.sum() != image_features.shape[:-1].numel():
+            raise ValueError(
+                f"The input provided to the model are wrong. The number of image tokens is {torch.sum(special_image_token_mask)} while"
+                f" the number of image given to the model is {num_images}. This prevents correct indexing and breaks batch generation."
+            )
+
+        final_embedding[image_to_overwrite] = image_features.contiguous().reshape(-1, embed_dim).to(target_device)
+        final_attention_mask |= image_to_overwrite
+        position_ids = (final_attention_mask.cumsum(-1) - 1).masked_fill_((final_attention_mask == 0), 1)
+
+        # 6. Mask out the embedding at padding positions, as we later use the past_key_value value to determine the non-attended tokens.
+        batch_indices, pad_indices = torch.where(input_ids == self.config.pad_token_id)
+        indices_to_mask = new_token_positions[batch_indices, pad_indices]
+
+        final_embedding[batch_indices, indices_to_mask] = 0
+
+        if labels is None:
+            final_labels = None
+
+        return (final_embedding, final_attention_mask, final_labels, position_ids)
