@@ -35,6 +35,18 @@ class MplugOwlPretrainingArguments(TrainingArguments):
         default="eval_other",
         metadata={"help": ""},
     )
+    valid_exclude_ls: List[str] = field(
+        default=None,
+        metadata={"help": ""},
+    )
+    valid_truncate_num: int = field(
+        default=3000,
+        metadata={"help": ""},
+    )
+    split_valid: bool = field(
+        default=False,
+        metadata={"help": ""},
+    )
     cache_file_name: str = field(
         default=None,
         metadata={"help": "Path to cached file name"},
@@ -72,10 +84,6 @@ class MplugOwlPretrainingArguments(TrainingArguments):
         metadata={"help": ""},
     )
 
-    abstractor_hidden_size: int = field(
-        default=None,
-        metadata={"help": ""},
-    )
     abstractor_num_hidden_layers: int = field(
         default=None,
         metadata={"help": ""},
