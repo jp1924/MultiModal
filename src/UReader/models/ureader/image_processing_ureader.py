@@ -14,12 +14,14 @@
 # limitations under the License.
 """Image processor class for UReader."""
 
-from typing import Dict, List, Optional, Union, Tuple
+import copy
+import warnings
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
 from transformers.image_processing_utils import BaseImageProcessor, BatchFeature, get_size_dict
-from transformers.image_transforms import resize, to_channel_dimension_format
+from transformers.image_transforms import resize
 from transformers.image_utils import (
     ChannelDimension,
     ImageInput,
@@ -33,17 +35,12 @@ from transformers.image_utils import (
     validate_preprocess_arguments,
 )
 from transformers.utils import TensorType, logging
-import torch
-from torchvision import transforms
-from torchvision.ops.boxes import box_area
-from torchvision.transforms import functional as F
-from torchvision.transforms.transforms import InterpolationMode
-from PIL import Image
+
 
 try:
     from einops import rearrange, repeat
-except:
-    raise ImportError()
+except ImportError:
+    raise ImportError("UReader processor를 사용하기 위해선 einops를 무조건 설치해야 합니다!")
 
 
 logger = logging.get_logger(__name__)
@@ -112,6 +109,7 @@ class UReaderImageProcessor(BaseImageProcessor):
     """
 
     model_input_names = ["pixel_values"]
+    _processor_class = "UReaderImageProcessor"
 
     def __init__(
         self,
@@ -138,14 +136,15 @@ class UReaderImageProcessor(BaseImageProcessor):
 
         # shortest_edge는 처리할 수 없음.
         # t_x, t_y, b_x, b_y
+        self.anchors = anchors  # for save
         get_anchor_box = lambda anchor: (
             0,
             0,
             anchor[1] * self.size["width"],
             anchor[0] * self.size["height"],
         )
-        self.anchors = np.array([get_anchor_box(anchor) for anchor in anchors])
-        self.max_anchor = max([max(anchor) for anchor in anchors])
+        self.anchors_box = np.array([get_anchor_box(anchor) for anchor in anchors])
+        self.max_anchor_box = max([max(anchor) for anchor in anchors])
 
         self._valid_processor_keys = [
             "images",
@@ -159,7 +158,6 @@ class UReaderImageProcessor(BaseImageProcessor):
             "return_tensors",
             "data_format",
             "input_data_format",
-            "anchors",
             "patch_padding",
             "return_padding_mask",
         ]
@@ -277,9 +275,7 @@ class UReaderImageProcessor(BaseImageProcessor):
         """
         size = get_size_dict(size)
         if "height" not in size or "width" not in size:
-            raise ValueError(
-                f"The `size` dictionary must contain the keys `height` and `width`. Got {size.keys()}"
-            )
+            raise ValueError(f"The `size` dictionary must contain the keys `height` and `width`. Got {size.keys()}")
         output_size = (size["height"], size["width"])
         return resize(
             image,
@@ -299,11 +295,9 @@ class UReaderImageProcessor(BaseImageProcessor):
         data_format: Optional[Union[str, ChannelDimension]] = None,
         input_data_format: Optional[Union[str, ChannelDimension]] = None,
     ):
-        anchors = anchors if anchors is not None else self.anchors
+        anchors = anchors if anchors is not None else self.anchors_box
         if "height" not in size or "width" not in size:
-            raise ValueError(
-                f"The `size` dictionary must contain the keys `height` and `width`. Got {size.keys()}"
-            )
+            raise ValueError(f"The `size` dictionary must contain the keys `height` and `width`. Got {size.keys()}")
         # t_x, t_y, b_x, b_y
         image_box = np.array([[0, 0, size["width"], size["height"]]])
 
@@ -346,9 +340,7 @@ class UReaderImageProcessor(BaseImageProcessor):
         size_dict = get_size_dict(size)
 
         if "height" not in size or "width" not in size:
-            raise ValueError(
-                f"The `size` dictionary must contain the keys `height` and `width`. Got {size.keys()}"
-            )
+            raise ValueError(f"The `size` dictionary must contain the keys `height` and `width`. Got {size.keys()}")
 
         if input_data_format is None:
             input_data_format = infer_channel_dimension_format(nocut_image)
@@ -390,7 +382,7 @@ class UReaderImageProcessor(BaseImageProcessor):
         # num_patch, (ph,pw)
         local_patch = np.concatenate([x_axis, y_axis], axis=2)
         local_patch = rearrange(local_patch, "num_h num_w p-> (num_h num_w) p", p=2)
-        nocut_patch = np.ones((1, 2), dtype=np.int32) * self.max_anchor
+        nocut_patch = np.ones((1, 2), dtype=np.int32) * self.max_anchor_box
 
         pixel_values = np.concatenate([nocut_image, local_image], axis=0)
         patch_position = np.concatenate([nocut_patch, local_patch], axis=0)
@@ -425,6 +417,7 @@ class UReaderImageProcessor(BaseImageProcessor):
         data_format: Union[str, ChannelDimension] = ChannelDimension.FIRST,
         input_data_format: Optional[Union[str, ChannelDimension]] = None,
         anchors: Optional[List[List[int]]] = None,
+        padding: bool = False,
         return_patch_position_masks: bool = False,
         **kwargs,
     ) -> Dict[str, Union[List[np.ndarray], np.ndarray]]:
@@ -478,7 +471,7 @@ class UReaderImageProcessor(BaseImageProcessor):
         rescale_factor = rescale_factor if rescale_factor is not None else self.rescale_factor
         image_mean = image_mean if image_mean is not None else self.image_mean
         image_std = image_std if image_std is not None else self.image_std
-        anchors = anchors if anchors is not None else self.anchors
+        anchors = anchors if anchors is not None else self.anchors_box
         size = size if size is not None else self.size
 
         size_dict = get_size_dict(size)
@@ -613,11 +606,35 @@ class UReaderImageProcessor(BaseImageProcessor):
             pixel_value_ls.append(pixel_values)
             patch_position_ls.append(patch_position)
 
-        pixel_values, patch_padding_mask = self.pad(pixel_value_ls)
-        patch_positions, _ = self.pad(patch_position_ls)
-        data = {"pixel_values": pixel_values, "patch_positions": patch_positions}
+        if padding:
+            pixel_values, patch_padding_mask = self.pad(pixel_value_ls)
+            patch_positions, _ = self.pad(patch_position_ls)
+            data = {
+                "pixel_values": pixel_values,
+                "patch_positions": patch_positions,
+                "patch_position_mask": patch_padding_mask,
+            }
+        else:
+            data = {"pixel_values": pixel_value_ls, "patch_positions": patch_position_ls}
 
-        if return_patch_position_masks:
-            data["patch_position_mask"] = patch_padding_mask
+            if return_tensors:
+                warnings.warn("padding=False인 상태에선 무조건 List[np.ndarray] 형식으로 return 됩니다!")
+                return_tensors = None
 
         return BatchFeature(data=data, tensor_type=return_tensors)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Serializes this instance to a Python dictionary.
+
+        Returns:
+            `Dict[str, Any]`: Dictionary of all the attributes that make up this image processor instance.
+        """
+        output = copy.deepcopy(self.__dict__)
+
+        del output["anchors_box"]
+        del output["max_anchor_box"]
+
+        output["image_processor_type"] = self.__class__.__name__
+
+        return output
